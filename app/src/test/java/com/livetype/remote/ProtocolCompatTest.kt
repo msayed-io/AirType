@@ -1,0 +1,190 @@
+package com.livetype.remote
+
+import com.livetype.remote.core.pairing.QrError
+import com.livetype.remote.core.pairing.QrParseResult
+import com.livetype.remote.core.pairing.QrPayloadParser
+import com.livetype.remote.core.protocol.BridgeJson
+import com.livetype.remote.core.protocol.Envelope
+import com.livetype.remote.core.session.StreamSession
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Locks the wire contract to the exact shape the Windows "LiveType Bridge" app
+ * (System.Text.Json, camelCase) emits and parses. If either side drifts, these fail.
+ */
+class ProtocolCompatTest {
+
+    private fun keysOf(json: String): Set<String> =
+        Regex("\"([a-zA-Z_]+)\":").findAll(json).map { it.groupValues[1] }.toSet()
+
+    @Test
+    fun `text_edit carries exactly the Windows-side camelCase keys`() {
+        val json = BridgeJson.encode(Envelope.textEdit(3, 2, "نص", 123L))
+        val keys = keysOf(json)
+        assertTrue(keys.containsAll(listOf("type", "revision", "deleteCount", "insertText", "timestamp")))
+        // The Windows side uses camelCase "deleteCount"/"insertText" — NOT snake_case.
+        assertTrue(json.contains("\"deleteCount\""))
+        assertTrue(json.contains("\"insertText\""))
+    }
+
+    @Test
+    fun `pair_request shape`() {
+        val json = BridgeJson.encode(Envelope.pairRequest("sid123", "431552", "Pixel"))
+        assertTrue(json.contains("\"type\":\"pair_request\""))
+        assertTrue(json.contains("\"sessionId\":\"sid123\""))
+        assertTrue(json.contains("\"pin\":\"431552\""))
+        assertTrue(json.contains("\"deviceName\":\"Pixel\""))
+    }
+
+    @Test
+    fun `reset_stream shape`() {
+        val json = BridgeJson.encode(Envelope.resetStream(2, 11))
+        assertTrue(json.contains("\"baselineRevision\":2"))
+        assertTrue(json.contains("\"appliedLength\":11"))
+    }
+
+    @Test
+    fun `decode ignores unknown fields like the Windows side does`() {
+        val incoming = """
+            {"type":"ack","revision":5,"applied":true,"reason":"duplicate",
+             "backspaces":0,"inserts":0,"receivedAtUtc":1700000000000,
+             "futureFieldFromNewerServer":42}
+        """.trimIndent()
+        val env = BridgeJson.decode(incoming)
+        assertNotNull(env)
+        assertEquals("ack", env!!.type)
+        assertEquals(5, env.revision)
+        assertEquals(true, env.applied)
+    }
+
+    @Test
+    fun `decode of the exact QR payload Windows generates`() {
+        // This is the literal JSON produced by QrPayload.Build on the Windows side.
+        val windowsQr = """
+            {"v":1,"app":"LiveTypeBridge","ws":"ws://192.168.1.123:53017/livetype",
+             "host":"192.168.1.123","port":53017,"sid":"c34d6bb93a15a931",
+             "pin":"432048","exp":9999999999999}
+        """.trimIndent()
+        val result = QrPayloadParser.parse(windowsQr, nowMs = 1_000_000L)
+        assertTrue(result is QrParseResult.Ok)
+        val info = (result as QrParseResult.Ok).info
+        assertEquals("ws://192.168.1.123:53017/livetype", info.wsUrl)
+        assertEquals(53017, info.port)
+        assertEquals("c34d6bb93a15a931", info.sessionId)
+        assertEquals("432048", info.pin)
+    }
+
+    @Test
+    fun `qr from another app is rejected`() {
+        val result = QrPayloadParser.parse("""{"app":"OtherApp","host":"1.2.3.4","port":80,"sid":"x","pin":"123456","exp":9999999999999}""")
+        assertEquals(QrError.WRONG_APP, (result as QrParseResult.Invalid).reason)
+    }
+
+    @Test
+    fun `expired qr is rejected`() {
+        val result = QrPayloadParser.parse(
+            """{"app":"LiveTypeBridge","host":"1.2.3.4","port":80,"sid":"x","pin":"123456","exp":1000}""",
+            nowMs = 2000L,
+        )
+        assertEquals(QrError.EXPIRED, (result as QrParseResult.Invalid).reason)
+    }
+
+    @Test
+    fun `garbage qr is rejected safely`() {
+        assertNull(BridgeJson.decode("not json {{"))
+        val result = QrPayloadParser.parse("随便 nonsense")
+        assertTrue(result is QrParseResult.Invalid)
+    }
+}
+
+class RevisionOrderingTest {
+
+    private fun session() = StreamSession(nowMs = { 42L })
+
+    @Test
+    fun `revisions increase monotonically with text changes`() {
+        val s = session()
+        s.onTextChanged("a")
+        s.onTextChanged("ab")
+        s.onTextChanged("abc")
+        assertEquals(3, s.revision)
+    }
+
+    @Test
+    fun `no-op changes do not consume revisions`() {
+        val s = session()
+        s.onTextChanged("text")
+        s.onTextChanged("text") // identical — nothing sent
+        assertEquals(1, s.revision)
+    }
+
+    @Test
+    fun `server reset request is answered with reset + rewrite pair`() {
+        val s = session()
+        s.onTextChanged("مرحبا Hello")
+        val answer = s.onServerResetRequest(Envelope(type = "reset_stream", baselineRevision = 2, appliedLength = 11))
+        assertEquals(2, answer.size)
+        assertEquals("reset_stream", answer[0].type)
+        assertEquals(2, answer[0].baselineRevision)
+        assertEquals(11, answer[0].appliedLength)
+        assertEquals("text_edit", answer[1].type)
+        assertEquals(3, answer[1].revision)
+        assertEquals(11, answer[1].deleteCount)
+        assertEquals("مرحبا Hello", answer[1].insertText)
+    }
+
+    @Test
+    fun `reconnect resync restores mirror and field`() {
+        val s = session()
+        s.onTextChanged("كامل النص المكتوب")
+        val msgs = s.resyncAfterReconnect()
+        assertEquals(2, msgs.size)
+        assertEquals("reset_stream", msgs[0].type)
+        assertEquals(0, msgs[0].baselineRevision)
+        // The PC field still holds the old text; rewrite must delete that length first.
+        assertEquals("كامل النص المكتوب".length, msgs[1].deleteCount)
+        assertEquals("كامل النص المكتوب", msgs[1].insertText)
+        assertEquals(1, msgs[1].revision)
+    }
+
+    @Test
+    fun `pause then resume sends only the delta`() {
+        val s = session()
+        s.onTextChanged("نص")
+        s.onAck(Envelope(type = "ack", revision = 1, applied = true))
+        s.setStreamEnabled(false)
+        s.onTextChanged("نص زيادة كتير بعدين")
+        val msgs = s.resyncAfterPause()
+        assertEquals(2, msgs.size)
+        assertEquals("reset_stream", msgs[0].type)
+        assertEquals(1, msgs[0].baselineRevision)
+        assertEquals("نص".length, msgs[0].appliedLength)
+        assertEquals(0, msgs[1].deleteCount)
+        assertEquals(" زيادة كتير بعدين", msgs[1].insertText)
+    }
+
+    @Test
+    fun `clear text sends full deletion and keeps mirror consistent`() {
+        val s = session()
+        s.onTextChanged("hello")
+        val env = s.clearText()
+        assertNotNull(env)
+        assertEquals(5, env!!.deleteCount)
+        assertEquals("", env.insertText)
+        assertEquals("", s.localText)
+    }
+
+    @Test
+    fun `streaming disabled swallows edits but keeps local text`() {
+        val s = session()
+        s.onTextChanged("بداية")
+        s.setStreamEnabled(false)
+        val env = s.onTextChanged("بداية وزيادة")
+        assertNull(env)
+        assertEquals("بداية وزيادة", s.localText)
+    }
+}

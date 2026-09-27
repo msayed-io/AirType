@@ -1,0 +1,18 @@
+# Gradle
+.gradle/
+build/
+
+# Android
+local.properties
+*.iml
+.idea/
+.kotlin/
+.cxx/
+captures/
+
+# Our local tooling (never part of the repo)
+tools/
+
+# OS
+.DS_Store
+Thumbs.db
