@@ -7,7 +7,7 @@ package com.livetype.remote.ui
 object Strings {
 
     private val ar: Map<String, String> = mapOf(
-        "app_title" to "LiveType Remote",
+        "app_title" to "AirType",
         "tagline" to "اكتب على هاتفك، يظهر على اللابتوب فورًا — نفس شبكة الواي فاي فقط، بدون إنترنت",
         "pair_laptop" to "ربط اللابتوب",
         "manual_entry" to "إدخال يدوي",
@@ -94,7 +94,7 @@ object Strings {
     )
 
     private val en: Map<String, String> = mapOf(
-        "app_title" to "LiveType Remote",
+        "app_title" to "AirType",
         "tagline" to "Type on your phone, it appears on your laptop instantly — same Wi-Fi only, no Internet",
         "pair_laptop" to "Pair laptop",
         "manual_entry" to "Manual entry",

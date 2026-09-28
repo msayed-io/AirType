@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LiveTypeRemote"
+rootProject.name = "AirType"
 include(":app")
