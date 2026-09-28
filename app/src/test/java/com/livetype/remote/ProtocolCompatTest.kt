@@ -141,14 +141,29 @@ class RevisionOrderingTest {
     fun `reconnect resync restores mirror and field`() {
         val s = session()
         s.onTextChanged("كامل النص المكتوب")
+        // Only server-confirmed text counts: the ack makes revision 1 synced.
+        s.onAck(Envelope(type = "ack", revision = 1, applied = true))
         val msgs = s.resyncAfterReconnect()
         assertEquals(2, msgs.size)
         assertEquals("reset_stream", msgs[0].type)
         assertEquals(0, msgs[0].baselineRevision)
-        // The PC field still holds the old text; rewrite must delete that length first.
+        // The PC field still holds the synced text; rewrite must delete that length first.
         assertEquals("كامل النص المكتوب".length, msgs[1].deleteCount)
         assertEquals("كامل النص المكتوب", msgs[1].insertText)
         assertEquals(1, msgs[1].revision)
+    }
+
+    @Test
+    fun `reconnect with unconfirmed ops deletes only the confirmed length`() {
+        val s = session()
+        s.onTextChanged("نص مؤكد")
+        s.onAck(Envelope(type = "ack", revision = 1, applied = true))
+        // Sent but never acked (connection died) — must NOT be assumed applied.
+        s.onTextChanged("نص مؤكد وغير مؤكد")
+        val msgs = s.resyncAfterReconnect()
+        // Conservative: delete only what the server confirmed, never more.
+        assertEquals("نص مؤكد".length, msgs[1].deleteCount)
+        assertEquals("نص مؤكد وغير مؤكد", msgs[1].insertText)
     }
 
     @Test
