@@ -7,8 +7,13 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
+    <!-- LAN-only pairing over ws:// by design; security comes from the PIN +
+         session token, not TLS. Android (API 28+) blocks cleartext unless
+         explicitly allowed, which killed every connection before it left
+         the phone. -->
     <application
         android:allowBackup="false"
+        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"

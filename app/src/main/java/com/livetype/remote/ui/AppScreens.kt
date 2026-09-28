@@ -160,7 +160,9 @@ fun errorText(codeOrMessage: String): String {
         "MISSING_FIELDS" to "err_MISSING_FIELDS",
     )
     val key = direct[codeOrMessage] ?: if (codeOrMessage.startsWith("err_")) codeOrMessage else null
-    return if (key != null) s(key) else s("err_generic")
+    // Unknown codes (e.g. raw transport messages) are shown verbatim — hiding
+    // them behind a generic string is what made the connection failure undiagnosable.
+    return if (key != null) s(key) else codeOrMessage
 }
 
 @Composable

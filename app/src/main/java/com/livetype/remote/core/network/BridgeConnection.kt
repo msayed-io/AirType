@@ -93,7 +93,16 @@ class BridgeConnection(
             state = if (isReconnect) ConnState.RECONNECTING else ConnState.CONNECTING,
             wsUrl = url,
         )
-        val request = Request.Builder().url(url).build()
+        // A malformed manual-entry URL must fail loudly, never crash the app.
+        val request = runCatching { Request.Builder().url(url).build() }
+            .getOrElse {
+                _state.value = _state.value.copy(
+                    state = ConnState.FAILED,
+                    lastErrorCode = "bad_address",
+                    lastErrorDetail = it.message?.take(140),
+                )
+                return
+            }
         wsRef.set(client.newWebSocket(request, Listener(isReconnect)))
     }
 
@@ -148,6 +157,12 @@ class BridgeConnection(
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             if (closingByUser.get()) return
             stopHeartbeat()
+            // Surface the transport reason (e.g. cleartext blocked, unreachable host)
+            // instead of silently retrying forever with no feedback.
+            _state.value = _state.value.copy(
+                lastErrorCode = "transport",
+                lastErrorDetail = t.message?.take(140) ?: "network error",
+            )
             scheduleReconnect()
         }
 
