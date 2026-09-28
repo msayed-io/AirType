@@ -1,0 +1,6 @@
+{
+  "name": "LiveType Remote",
+  "description": "Android remote keyboard and live typing streamer for desktop pairing",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
