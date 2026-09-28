@@ -112,6 +112,7 @@ fun QrScannerScreen(vm: AppViewModel) {
             CameraQrView(
                 context = context,
                 lifecycleOwner = lifecycleOwner,
+                hasPermission = hasPermission,
                 onQr = { vm.onQrScanned(it) },
             )
         } else {
@@ -144,6 +145,7 @@ fun QrScannerScreen(vm: AppViewModel) {
 private fun CameraQrView(
     context: android.content.Context,
     lifecycleOwner: androidx.lifecycle.LifecycleOwner,
+    hasPermission: Boolean,
     onQr: (String) -> Unit,
 ) {
     val previewView = remember { PreviewView(context) }
