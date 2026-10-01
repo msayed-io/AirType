@@ -62,17 +62,14 @@ class StreamSession(
     }
 
     /**
-     * "مسح النص" — clears the local field AND erases the streamed text on the PC
-     * (otherwise the two sides would diverge and the next edit would misfire).
+     * "مسح النص" — clears the local text in the phone app ONLY,
+     * without erasing the text already typed on the laptop.
+     * Future edits append from an empty baseline with deleteCount = 0.
      */
     fun clearText(): Envelope? {
-        val op = TextDiff.diff(localText, "")
         localText = ""
-        if (!streamEnabled) return null
-        if (op.deleteCount == 0) return null
-        revision += 1
-        opsSent++
-        return Envelope.textEdit(revision, op.deleteCount, op.insertText, nowMs())
+        lastSyncedText = ""
+        return null
     }
 
     fun setStreamEnabled(enabled: Boolean) {

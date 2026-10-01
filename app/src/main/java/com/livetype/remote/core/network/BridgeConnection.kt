@@ -27,6 +27,7 @@ class BridgeConnection(
     private val client: OkHttpClient,
     private val scope: CoroutineScope,
     private val deviceName: String,
+    private val clientId: String = "",
 ) {
     data class Snapshot(
         val state: ConnState = ConnState.IDLE,
@@ -53,15 +54,23 @@ class BridgeConnection(
     private val closingByUser = AtomicBoolean(false)
     private var sessionId: String? = null
     private var pin: String? = null
+    private var initialToken: String? = null
     private var sessionExpiresAtMs: Long = 0
     private var heartbeatJob: Job? = null
     private var reconnectJob: Job? = null
 
     // ---- lifecycle ---------------------------------------------------------
 
-    fun start(url: String, sessionId: String, pin: String, expiresAtMs: Long) {
+    fun start(
+        url: String,
+        sessionId: String,
+        pin: String,
+        expiresAtMs: Long,
+        token: String? = null,
+    ) {
         this.sessionId = sessionId
         this.pin = pin
+        this.initialToken = token
         this.sessionExpiresAtMs = expiresAtMs
         closingByUser.set(false)
         openSocket(url, isReconnect = false)
@@ -110,8 +119,15 @@ class BridgeConnection(
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             val sid = sessionId ?: return
-            val p = pin ?: return
-            webSocket.send(BridgeJson.encode(Envelope.pairRequest(sid, p, deviceName)))
+            val p = pin ?: ""
+            val tok = initialToken ?: authRef.get()
+            webSocket.send(BridgeJson.encode(Envelope.pairRequest(
+                sessionId = sid,
+                pin = p,
+                deviceName = deviceName,
+                token = tok,
+                clientId = clientId.takeIf { it.isNotBlank() },
+            )))
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -175,14 +191,14 @@ class BridgeConnection(
 
     private fun scheduleReconnect() {
         if (closingByUser.get()) return
-        if (System.currentTimeMillis() >= sessionExpiresAtMs) {
+        if (sessionExpiresAtMs > 0 && System.currentTimeMillis() >= sessionExpiresAtMs) {
             _state.value = _state.value.copy(state = ConnState.DISCONNECTED)
             return
         }
         if (reconnectJob?.isActive == true) return
         reconnectJob = scope.launch {
             var attempt = 0
-            while (isActive && !closingByUser.get() && System.currentTimeMillis() < sessionExpiresAtMs) {
+            while (isActive && !closingByUser.get() && (sessionExpiresAtMs <= 0 || System.currentTimeMillis() < sessionExpiresAtMs)) {
                 attempt++
                 val backoffMs = longArrayOf(1000, 2000, 4000, 5000)[(attempt - 1).coerceAtMost(3)]
                 delay(backoffMs)

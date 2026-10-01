@@ -183,14 +183,17 @@ class RevisionOrderingTest {
     }
 
     @Test
-    fun `clear text sends full deletion and keeps mirror consistent`() {
+    fun `clear text clears only local phone text without deleting remote laptop text`() {
         val s = session()
         s.onTextChanged("hello")
         val env = s.clearText()
-        assertNotNull(env)
-        assertEquals(5, env!!.deleteCount)
-        assertEquals("", env.insertText)
+        assertNull(env)
         assertEquals("", s.localText)
+        // Next edit sends new text with deleteCount = 0 (no backspaces on laptop)
+        val nextEnv = s.onTextChanged("world")
+        assertNotNull(nextEnv)
+        assertEquals(0, nextEnv!!.deleteCount)
+        assertEquals("world", nextEnv.insertText)
     }
 
     @Test

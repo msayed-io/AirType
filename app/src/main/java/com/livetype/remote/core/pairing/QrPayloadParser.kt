@@ -39,7 +39,7 @@ data class PairingInfo(
     val pin: String,
     val expiresAtMs: Long,
 ) {
-    val isValidNow: Boolean get() = System.currentTimeMillis() < expiresAtMs
+    val isValidNow: Boolean get() = expiresAtMs <= 0L || System.currentTimeMillis() < expiresAtMs
 }
 
 object QrPayloadParser {
@@ -84,7 +84,7 @@ object QrPayloadParser {
         return when {
             h.isEmpty() || port !in 1..65535 || s.isEmpty() -> QrParseResult.Invalid(QrError.MISSING_FIELDS)
             !pinRegex.matches(p) -> QrParseResult.Invalid(QrError.BAD_PIN)
-            expiresAtMs in 1..System.currentTimeMillis() -> QrParseResult.Invalid(QrError.EXPIRED)
+            expiresAtMs > 0L && expiresAtMs <= System.currentTimeMillis() -> QrParseResult.Invalid(QrError.EXPIRED)
             else -> QrParseResult.Ok(PairingInfo("ws://$h:$port/livetype", h, port, s, p, expiresAtMs))
         }
     }

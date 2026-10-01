@@ -15,6 +15,7 @@ data class Envelope(
     val sessionId: String? = null,
     val pin: String? = null,
     val deviceName: String? = null,
+    val clientId: String? = null,
     val token: String? = null,
     val ok: Boolean? = null,
     val errorCode: String? = null,
@@ -71,11 +72,19 @@ data class Envelope(
     }
 
     companion object {
-        fun pairRequest(sessionId: String, pin: String, deviceName: String) = Envelope(
+        fun pairRequest(
+            sessionId: String,
+            pin: String?,
+            deviceName: String,
+            token: String? = null,
+            clientId: String? = null,
+        ) = Envelope(
             type = Types.PAIR_REQUEST,
             sessionId = sessionId,
-            pin = pin,
+            pin = if (token.isNullOrBlank()) pin?.takeIf { it.isNotBlank() } else null,
             deviceName = deviceName,
+            token = token?.takeIf { it.isNotBlank() },
+            clientId = clientId?.takeIf { it.isNotBlank() },
         )
 
         fun textEdit(revision: Int, deleteCount: Int, insertText: String, nowMs: Long) = Envelope(

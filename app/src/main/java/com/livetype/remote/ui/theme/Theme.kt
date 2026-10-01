@@ -1,41 +1,42 @@
 package com.livetype.remote.ui.theme
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val DarkColorScheme = darkColorScheme(
-    primary = LiveTypeTokens.IndigoElectric,
-    onPrimary = Color.White,
+private val AirTypeColorScheme = lightColorScheme(
+    primary = LiveTypeTokens.SurfaceDark,
+    onPrimary = LiveTypeTokens.TextOnDark,
     primaryContainer = LiveTypeTokens.BgCardHighlight,
-    onPrimaryContainer = Color.White,
-    secondary = LiveTypeTokens.VioletNeon,
-    onSecondary = Color.White,
-    secondaryContainer = LiveTypeTokens.BgCardElevated,
-    onSecondaryContainer = LiveTypeTokens.TextPrimary,
-    tertiary = LiveTypeTokens.CyanPulse,
-    background = LiveTypeTokens.BgDeep,
+    onPrimaryContainer = LiveTypeTokens.TextPrimary,
+    secondary = LiveTypeTokens.AccentPeriwinkle,
+    onSecondary = LiveTypeTokens.TextOnDark,
+    secondaryContainer = LiveTypeTokens.AccentPeriwinkleBg,
+    onSecondaryContainer = LiveTypeTokens.AccentPeriwinkleDeep,
+    tertiary = LiveTypeTokens.SurfaceDarkMuted,
+    onTertiary = LiveTypeTokens.TextOnDark,
+    background = LiveTypeTokens.BgContainer,
     onBackground = LiveTypeTokens.TextPrimary,
-    surface = LiveTypeTokens.BgCard,
+    surface = LiveTypeTokens.BgSurfaceWhite,
     onSurface = LiveTypeTokens.TextPrimary,
-    surfaceVariant = LiveTypeTokens.BgCardElevated,
+    surfaceVariant = LiveTypeTokens.BgCardHighlight,
     onSurfaceVariant = LiveTypeTokens.TextSecondary,
     outline = LiveTypeTokens.BorderSubtle,
     outlineVariant = LiveTypeTokens.BorderStrong,
     error = LiveTypeTokens.StateError,
     onError = Color.White,
     errorContainer = LiveTypeTokens.StateErrorContainer,
-    onErrorContainer = Color(0xFFFFD2D9),
+    onErrorContainer = LiveTypeTokens.StateError,
 )
 
 @Composable
 fun LiveTypeTheme(
-    darkTheme: Boolean = true, // LiveType Remote is crafted with deep obsidian & luminous glow as its signature identity
+    darkTheme: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     MaterialTheme(
-        colorScheme = DarkColorScheme,
+        colorScheme = AirTypeColorScheme,
         typography = LiveTypeTypography,
         content = content,
     )
