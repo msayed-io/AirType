@@ -39,6 +39,19 @@ class StreamSession(
     var revision: Int = 0
         private set
 
+    private data class PendingEdit(
+        val deleteCount: Int,
+        val insertText: String,
+        val resultingText: String? = null,
+    )
+
+    /**
+     * Edits sent but not yet confirmed. Keeping the operation for each revision lets
+     * delayed ACKs advance [lastSyncedText] to the exact text that revision produced;
+     * using the current UI text here would lose confirmation whenever typing outruns
+     * the network round trip.
+     */
+    private val pendingEdits = sortedMapOf<Int, PendingEdit>()
     private var streamEnabled = true
 
     // ---- pairing -------------------------------------------------------------
@@ -58,6 +71,8 @@ class StreamSession(
         if (op.isEmpty || !streamEnabled) return null
         revision += 1
         opsSent++
+        pendingEdits[revision] = PendingEdit(op.deleteCount, op.insertText)
+        trimPendingEdits()
         return Envelope.textEdit(revision, op.deleteCount, op.insertText, nowMs())
     }
 
@@ -69,6 +84,8 @@ class StreamSession(
     fun clearText(): Envelope? {
         localText = ""
         lastSyncedText = ""
+        lastSyncedRevision = revision
+        pendingEdits.clear()
         return null
     }
 
@@ -83,9 +100,22 @@ class StreamSession(
     /** Ack from the server for one of our ops. */
     fun onAck(env: Envelope) {
         if (env.applied != true) return
-        env.revision?.let { if (it >= lastSyncedRevision) lastSyncedRevision = it }
-        // Reconstruct the synced text from what we know we sent for that revision.
-        if (env.revision == revision) lastSyncedText = localText
+        val acknowledgedRevision = env.revision ?: return
+        if (acknowledgedRevision <= lastSyncedRevision) return
+
+        // ACKs can lag many revisions behind fast typing/dictation. Advance through
+        // the exact queued operations instead of assigning the current localText,
+        // which may already represent a much newer revision.
+        while (lastSyncedRevision < acknowledgedRevision) {
+            val nextRevision = lastSyncedRevision + 1
+            val pending = pendingEdits.remove(nextRevision) ?: return
+            lastSyncedText = pending.resultingText
+                ?: TextDiff.apply(
+                    lastSyncedText,
+                    TextDiff.Op(pending.deleteCount, pending.insertText),
+                )
+            lastSyncedRevision = nextRevision
+        }
     }
 
     /**
@@ -99,12 +129,29 @@ class StreamSession(
         val mirrorLen = (env.appliedLength ?: 0).coerceAtLeast(0)
         val reset = Envelope.resetStream(baselineRevision = baseline, appliedLength = mirrorLen)
         revision = baseline + 1
+        lastSyncedRevision = baseline
+        pendingEdits.clear()
         opsSent++
+        pendingEdits[revision] = PendingEdit(mirrorLen, localText, resultingText = localText)
         val rewrite = Envelope.textEdit(revision, mirrorLen, localText, nowMs())
         return listOf(reset, rewrite)
     }
 
     // ---- reconnect / pause-resume resync -----------------------------------------
+
+    /**
+     * Replays only unacknowledged revisions after a transient socket replacement.
+     * Desktop keeps the same stream mirror, so already-applied revisions are ignored
+     * as duplicates and genuinely lost revisions are applied exactly once.
+     */
+    fun unacknowledgedEdits(): List<Envelope> = pendingEdits.map { (pendingRevision, edit) ->
+        Envelope.textEdit(
+            pendingRevision,
+            edit.deleteCount,
+            edit.insertText,
+            nowMs(),
+        )
+    }
 
     /**
      * After a reconnect (fresh server pump with an empty mirror, but the PC field
@@ -114,10 +161,12 @@ class StreamSession(
     fun resyncAfterReconnect(): List<Envelope> {
         revision = 0
         lastSyncedRevision = 0
+        pendingEdits.clear()
         val mirrorLen = lastSyncedText.length
         val reset = Envelope.resetStream(baselineRevision = 0, appliedLength = mirrorLen)
         revision = 1
         opsSent++
+        pendingEdits[revision] = PendingEdit(mirrorLen, localText, resultingText = localText)
         val rewrite = Envelope.textEdit(revision, mirrorLen, localText, nowMs())
         return listOf(reset, rewrite)
     }
@@ -127,13 +176,27 @@ class StreamSession(
         val op = TextDiff.diff(lastSyncedText, localText)
         if (op.isEmpty) return emptyList()
         val reset = Envelope.resetStream(baselineRevision = revision, appliedLength = lastSyncedText.length)
+        lastSyncedRevision = revision
+        pendingEdits.clear()
         revision += 1
         opsSent++
+        pendingEdits[revision] = PendingEdit(op.deleteCount, op.insertText, resultingText = localText)
         val rewrite = Envelope.textEdit(revision, op.deleteCount, op.insertText, nowMs())
         return listOf(reset, rewrite)
     }
 
+    private fun trimPendingEdits() {
+        // Bound memory while offline without compromising normal ACK round trips.
+        while (pendingEdits.size > MAX_PENDING_EDITS) {
+            pendingEdits.remove(pendingEdits.firstKey())
+        }
+    }
+
     fun encode(env: Envelope): String = BridgeJson.encode(env)
+
+    private companion object {
+        const val MAX_PENDING_EDITS = 1024
+    }
 }
 
 /** Device name reported during pairing; kept in one place for tests. */

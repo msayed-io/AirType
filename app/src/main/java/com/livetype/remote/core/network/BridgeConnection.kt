@@ -52,6 +52,7 @@ class BridgeConnection(
     private val wsRef = AtomicReference<WebSocket?>(null)
     private val authRef = AtomicReference<String?>(null)
     private val closingByUser = AtomicBoolean(false)
+    private val terminalFailure = AtomicBoolean(false)
     private var sessionId: String? = null
     private var pin: String? = null
     private var initialToken: String? = null
@@ -73,6 +74,7 @@ class BridgeConnection(
         this.initialToken = token
         this.sessionExpiresAtMs = expiresAtMs
         closingByUser.set(false)
+        terminalFailure.set(false)
         openSocket(url, isReconnect = false)
     }
 
@@ -145,6 +147,9 @@ class BridgeConnection(
                         lastErrorDetail = null,
                     )
                     startHeartbeat(env.heartbeatIntervalMs ?: 2500)
+                    // Pairing persistence and UI side effects are owned by AppViewModel;
+                    // do not swallow this protocol message inside the transport layer.
+                    _messages.tryEmit(env)
                     if (wasReconnect) _reconnected.tryEmit(Unit)
                 }
 
@@ -162,8 +167,12 @@ class BridgeConnection(
                         lastErrorDetail = env.errorMessage,
                     )
                     stopHeartbeat()
+                    _messages.tryEmit(env)
                     // A dead session cannot be retried: pairing data must be refreshed.
-                    if (env.errorCode in RETRYABLE) reconnectJob?.cancel()
+                    if (env.errorCode in TERMINAL_SESSION_ERRORS) {
+                        terminalFailure.set(true)
+                        reconnectJob?.cancel()
+                    }
                 }
 
                 else -> _messages.tryEmit(env)
@@ -190,7 +199,7 @@ class BridgeConnection(
     }
 
     private fun scheduleReconnect() {
-        if (closingByUser.get()) return
+        if (closingByUser.get() || terminalFailure.get()) return
         if (sessionExpiresAtMs > 0 && System.currentTimeMillis() >= sessionExpiresAtMs) {
             _state.value = _state.value.copy(state = ConnState.DISCONNECTED)
             return
@@ -236,7 +245,7 @@ class BridgeConnection(
 
     private companion object {
         /** Errors that mean the session data itself is dead — retrying is pointless. */
-        val RETRYABLE = setOf(
+        val TERMINAL_SESSION_ERRORS = setOf(
             Envelope.Errors.BAD_PIN,
             Envelope.Errors.UNKNOWN_SESSION,
             Envelope.Errors.SESSION_EXPIRED,

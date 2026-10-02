@@ -123,6 +123,60 @@ class RevisionOrderingTest {
     }
 
     @Test
+    fun `delayed acknowledgements advance the exact confirmed text`() {
+        val s = session()
+        s.onTextChanged("ا")
+        s.onTextChanged("اب")
+        s.onTextChanged("ابت")
+
+        // The UI is already at revision 3 when ACK 1 arrives.
+        s.onAck(Envelope(type = "ack", revision = 1, applied = true))
+        assertEquals("ا", s.lastSyncedText)
+        assertEquals(1, s.lastSyncedRevision)
+
+        s.onAck(Envelope(type = "ack", revision = 2, applied = true))
+        assertEquals("اب", s.lastSyncedText)
+        s.onAck(Envelope(type = "ack", revision = 3, applied = true))
+        assertEquals("ابت", s.lastSyncedText)
+    }
+
+    @Test
+    fun `transient reconnect replays only unacknowledged revisions`() {
+        val s = session()
+        s.onTextChanged("a")
+        s.onTextChanged("ab")
+        s.onTextChanged("abc")
+        s.onAck(Envelope(type = "ack", revision = 1, applied = true))
+
+        val replay = s.unacknowledgedEdits()
+        assertEquals(listOf(2, 3), replay.map { it.revision })
+        assertEquals(listOf("b", "c"), replay.map { it.insertText })
+    }
+
+    @Test
+    fun `reconnect after lagging ack replaces only confirmed remote text`() {
+        val s = session()
+        s.onTextChanged("نص")
+        s.onTextChanged("نص طويل")
+        s.onTextChanged("نص طويل جدا")
+        s.onAck(Envelope(type = "ack", revision = 1, applied = true))
+        s.onAck(Envelope(type = "ack", revision = 2, applied = true))
+
+        val msgs = s.resyncAfterReconnect()
+        assertEquals("نص طويل".length, msgs[1].deleteCount)
+        assertEquals("نص طويل جدا", msgs[1].insertText)
+    }
+
+    @Test
+    fun `local clear prevents stale acknowledgements restoring old baseline`() {
+        val s = session()
+        s.onTextChanged("قديم")
+        s.clearText()
+        s.onAck(Envelope(type = "ack", revision = 1, applied = true))
+        assertEquals("", s.lastSyncedText)
+    }
+
+    @Test
     fun `server reset request is answered with reset + rewrite pair`() {
         val s = session()
         s.onTextChanged("مرحبا Hello")

@@ -86,6 +86,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var currentPcName: String = ""
     private var vibratedThisConnection = false
     private var hasAutoConnectedThisSession = false
+    private var resyncOnNextSessionReady = false
 
     private var committedVoiceText: String = ""
     private var voiceManager: VoiceRecognitionManager? = null
@@ -134,43 +135,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun tryDirectAutoConnect() {
-        if (hasAutoConnectedThisSession) return
-        if (!store.autoConnectEnabled) return
+        if (hasAutoConnectedThisSession || !store.autoConnectEnabled) return
         val saved = store.load() ?: return
         if (saved.token.isBlank() && saved.pin.isBlank()) return
 
-        hasAutoConnectedThisSession = true
+        // A desktop restart publishes a fresh runtime sessionId. Connecting with the
+        // saved sessionId races discovery and is guaranteed to fail with unknown_session.
+        // Keep scanning and let checkAutoConnect use the current beacon instead.
         _ui.update { it.copy(isAutoConnecting = true) }
-        val wsUrl = "ws://${saved.host}:${saved.port}/livetype"
-        beginPairing(
-            PairingInfo(wsUrl, saved.host, saved.port, saved.sessionId, saved.pin, 0L),
-            token = saved.token.takeIf { it.isNotBlank() },
-            pcName = saved.deviceName
-        )
+        discoveryManager.startDiscovery()
     }
 
     private fun checkAutoConnect(devices: List<DiscoveredDevice>) {
-        if (_ui.value.conn == ConnState.PAIRED) return
+        if (hasAutoConnectedThisSession) return
+        if (_ui.value.conn in setOf(ConnState.CONNECTING, ConnState.RECONNECTING, ConnState.PAIRED)) return
         if (_ui.value.screen != Screen.WELCOME && _ui.value.screen != Screen.CONNECTED) return
         if (!store.autoConnectEnabled) return
         val saved = store.load() ?: return
         if (saved.token.isBlank() && saved.pin.isBlank()) return
-        if (devices.isEmpty()) return
 
-        val match = devices.firstOrNull { it.host.equals(saved.host, ignoreCase = true) }
-            ?: devices.firstOrNull()
+        // Never offer a trusted bearer token to an arbitrary LAN beacon. Only the
+        // previously trusted host may receive it, and the current beacon supplies the
+        // fresh runtime sessionId required after Desktop restarts.
+        val match = devices.firstOrNull { it.host.equals(saved.host, ignoreCase = true) } ?: return
+        val sid = match.sessionId ?: return
 
-        if (match != null) {
-            hasAutoConnectedThisSession = true
-            _ui.update { it.copy(isAutoConnecting = true) }
-            val wsUrl = "ws://${match.host}:${match.port}/livetype"
-            val sid = match.sessionId ?: saved.sessionId
-            beginPairing(
-                PairingInfo(wsUrl, match.host, match.port, sid, saved.pin, 0L),
-                token = saved.token.takeIf { it.isNotBlank() },
-                pcName = match.name
-            )
-        }
+        hasAutoConnectedThisSession = true
+        _ui.update { it.copy(isAutoConnecting = true) }
+        val wsUrl = "ws://${match.host}:${match.port}/livetype"
+        beginPairing(
+            PairingInfo(
+                wsUrl,
+                match.host,
+                match.port,
+                sid,
+                pin = saved.pin.takeIf { saved.token.isBlank() }.orEmpty(),
+                expiresAtMs = 0L,
+            ),
+            token = saved.token.takeIf { it.isNotBlank() },
+            pcName = match.name
+        )
     }
 
     private fun initVoiceManager(app: Application) {
@@ -253,13 +257,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onSelectDiscoveredDevice(device: DiscoveredDevice) {
         val saved = store.load()
-        if (saved != null && (saved.token.isNotBlank() || saved.pin.isNotBlank())) {
-            // Direct 1-tap connect for trusted device with token — zero PIN prompts!
+        if (saved != null
+            && saved.token.isNotBlank()
+            && saved.host.equals(device.host, ignoreCase = true)
+            && !device.sessionId.isNullOrBlank()
+        ) {
+            // Direct 1-tap connect only to the host that owns this trusted token.
             val wsUrl = "ws://${device.host}:${device.port}/livetype"
-            val sid = device.sessionId ?: saved.sessionId
             beginPairing(
-                PairingInfo(wsUrl, device.host, device.port, sid, saved.pin, 0L),
-                token = saved.token.takeIf { it.isNotBlank() },
+                PairingInfo(wsUrl, device.host, device.port, device.sessionId.orEmpty(), pin = "", expiresAtMs = 0L),
+                token = saved.token,
                 pcName = device.name
             )
         } else {
@@ -320,6 +327,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         vibratedThisConnection = false
         currentInfo = info
         if (!pcName.isNullOrBlank()) currentPcName = pcName
+        // A newly discovered trusted desktop session has a fresh server-side mirror.
+        // A transient WebSocket reconnect within the same session does not.
+        resyncOnNextSessionReady = !token.isNullOrBlank() && session.localText.isNotEmpty()
 
         val conn = BridgeConnection(client, viewModelScope, deviceName = deviceName, clientId = store.clientId)
         connection = conn
@@ -365,8 +375,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             conn.reconnected.collect {
-                // Back online inside the same session: heal mirror + PC field safely.
-                conn.sendAll(session.resyncAfterReconnect())
+                // Desktop retains the logical stream pump for this runtime session.
+                // Replaying only unacknowledged revision IDs is therefore idempotent:
+                // applied edits are rejected as duplicates; lost edits apply once.
+                conn.sendAll(session.unacknowledgedEdits())
                 _ui.update { it.copy(text = session.localText, opsSent = session.opsSent, revision = session.revision) }
             }
         }
@@ -381,25 +393,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 val info = currentInfo
                 if (info != null) {
-                    val tok = env.token ?: ""
-                    val saved = SavedPairing(
-                        wsUrl = info.wsUrl,
-                        host = info.host,
-                        port = info.port,
-                        sessionId = info.sessionId,
-                        pin = info.pin,
-                        token = tok,
-                        expiresAtMs = 0L, // permanent
-                        deviceName = currentPcName.ifBlank { info.host },
-                    )
-                    store.save(saved)
-                    _ui.update {
-                        it.copy(
-                            savedPairingAvailable = true,
-                            pairingJustSucceeded = true,
-                            trustedHost = saved.host,
-                            trustedDeviceName = saved.deviceName
+                    val tok = env.token.orEmpty()
+                    if (store.rememberPairing && tok.isNotBlank()) {
+                        val saved = SavedPairing(
+                            wsUrl = info.wsUrl,
+                            host = info.host,
+                            port = info.port,
+                            sessionId = info.sessionId,
+                            // The persistent token replaces first-time PIN authentication.
+                            // Never retain the one-time PIN after trust succeeds.
+                            pin = "",
+                            token = tok,
+                            expiresAtMs = 0L,
+                            deviceName = currentPcName.ifBlank { info.host },
                         )
+                        store.save(saved)
+                        _ui.update {
+                            it.copy(
+                                savedPairingAvailable = true,
+                                pairingJustSucceeded = true,
+                                trustedHost = saved.host,
+                                trustedDeviceName = saved.deviceName
+                            )
+                        }
+                    }
+
+                    if (resyncOnNextSessionReady) {
+                        resyncOnNextSessionReady = false
+                        conn.sendAll(session.resyncAfterReconnect())
+                        _ui.update {
+                            it.copy(
+                                text = session.localText,
+                                opsSent = session.opsSent,
+                                revision = session.revision,
+                            )
+                        }
                     }
                 }
             }
@@ -428,6 +456,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                             lastError = env.errorMessage ?: "Token expired",
                             lastErrorCode = env.errorCode,
                             savedPairingAvailable = false,
+                        )
+                    }
+                } else if (env.errorCode == Envelope.Errors.UNKNOWN_SESSION
+                    || env.errorCode == Envelope.Errors.SESSION_EXPIRED
+                ) {
+                    // Desktop restarted and issued a fresh runtime sessionId. Keep the
+                    // persistent token, resume discovery, and reconnect from its beacon.
+                    hasAutoConnectedThisSession = false
+                    discoveryManager.startDiscovery()
+                    _ui.update {
+                        it.copy(
+                            lastError = null,
+                            lastErrorCode = null,
+                            isAutoConnecting = true,
                         )
                     }
                 } else {

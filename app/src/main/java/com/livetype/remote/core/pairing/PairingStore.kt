@@ -2,6 +2,8 @@ package com.livetype.remote.core.pairing
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import java.util.UUID
 
 /** A pairing the user chose to remember as a permanent trusted device. */
@@ -25,8 +27,12 @@ data class SavedPairing(
  */
 class PairingStore(context: Context) {
 
-    private val prefs: SharedPreferences =
-        context.applicationContext.getSharedPreferences("livetype_trusted_pairing", Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs: SharedPreferences = createEncryptedPreferences(appContext)
+
+    init {
+        migrateLegacyPreferences(appContext, prefs)
+    }
 
     /** Unique persistent client ID for this Android device. */
     val clientId: String by lazy {
@@ -69,7 +75,7 @@ class PairingStore(context: Context) {
     fun isDeviceTrusted(host: String, port: Int = 0): Boolean {
         val saved = load() ?: return false
         if (saved.token.isBlank() && saved.pin.isBlank()) return false
-        return saved.host.equals(host, ignoreCase = true) || saved.token.isNotBlank()
+        return saved.host.equals(host, ignoreCase = true)
     }
 
     fun clear() {
@@ -104,6 +110,44 @@ class PairingStore(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_AUTO_CONNECT, value).apply()
 
     private companion object {
+        const val LEGACY_PREFS_NAME = "livetype_trusted_pairing"
+        const val SECURE_PREFS_NAME = "livetype_trusted_pairing_secure"
+        const val KEY_MIGRATION_COMPLETE = "secure_migration_complete"
+
+        fun createEncryptedPreferences(context: Context): SharedPreferences {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            return EncryptedSharedPreferences.create(
+                context,
+                SECURE_PREFS_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+        }
+
+        fun migrateLegacyPreferences(context: Context, secure: SharedPreferences) {
+            if (secure.getBoolean(KEY_MIGRATION_COMPLETE, false)) return
+            val legacy = context.getSharedPreferences(LEGACY_PREFS_NAME, Context.MODE_PRIVATE)
+            val editor = secure.edit()
+            legacy.all.forEach { (key, value) ->
+                when (value) {
+                    is String -> editor.putString(key, value)
+                    is Boolean -> editor.putBoolean(key, value)
+                    is Int -> editor.putInt(key, value)
+                    is Long -> editor.putLong(key, value)
+                    is Float -> editor.putFloat(key, value)
+                    is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+                }
+            }
+            // Commit the encrypted copy before deleting plaintext credentials.
+            check(editor.putBoolean(KEY_MIGRATION_COMPLETE, true).commit()) {
+                "Could not migrate trusted pairing to encrypted storage"
+            }
+            legacy.edit().clear().apply()
+        }
+
         const val KEY_WS_URL = "ws_url"
         const val KEY_HOST = "host"
         const val KEY_PORT = "port"
