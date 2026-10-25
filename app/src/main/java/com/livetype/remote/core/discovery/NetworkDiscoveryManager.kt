@@ -1,10 +1,7 @@
 package com.livetype.remote.core.discovery
 
 import android.content.Context
-import android.net.nsd.NsdManager
-import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
-import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,10 +22,12 @@ import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * High-precision LAN Auto-Discovery Engine for LiveType Desktop Bridges.
- * Uses a hybrid approach for 100% discovery rate across all local Wi-Fi topologies:
- * 1. Apple Bonjour / mDNS Service Discovery via Android NsdManager (_livetype._tcp).
- * 2. Lightweight UDP Broadcast Beacon probing on UDP port 53018.
+ * LAN auto-discovery for LiveType Desktop Bridges.
+ *
+ * Discovery is UDP only: we broadcast a small probe to port 53018 and the PC answers
+ * with a JSON beacon (see [BeaconParser]). The Windows app does not advertise over
+ * mDNS at all, so the old NSD path here could never find anything — it was removed
+ * instead of being left as dead code that made the docs look wrong.
  */
 class NetworkDiscoveryManager(
     private val context: Context,
@@ -36,13 +35,11 @@ class NetworkDiscoveryManager(
 ) {
     companion object {
         const val TAG = "LiveTypeDiscovery"
-        const val SERVICE_TYPE = "_livetype._tcp."
         const val DISCOVERY_UDP_PORT = 53018
         const val PROBE_INTERVAL_MS = 2500L
         const val DEVICE_TTL_MS = 15000L
     }
 
-    private val nsdManager: NsdManager? = context.getSystemService(Context.NSD_SERVICE) as? NsdManager
     private val wifiManager: WifiManager? = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private var multicastLock: WifiManager.MulticastLock? = null
 
@@ -53,7 +50,6 @@ class NetworkDiscoveryManager(
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
-    private var nsdDiscoveryListener: NsdManager.DiscoveryListener? = null
     private var udpJob: Job? = null
     private var cleanupJob: Job? = null
 
@@ -62,14 +58,12 @@ class NetworkDiscoveryManager(
         _isScanning.value = true
 
         acquireMulticastLock()
-        startNsdDiscovery()
         startUdpBeaconProbing()
         startStaleDeviceCleaner()
     }
 
     fun stopDiscovery() {
         _isScanning.value = false
-        stopNsdDiscovery()
         udpJob?.cancel()
         udpJob = null
         cleanupJob?.cancel()
@@ -112,102 +106,7 @@ class NetworkDiscoveryManager(
     }
 
     // -------------------------------------------------------------------------
-    // 1. mDNS / NSD Discovery
-    // -------------------------------------------------------------------------
-
-    private fun startNsdDiscovery() {
-        val nsd = nsdManager ?: return
-        if (nsdDiscoveryListener != null) return
-
-        val listener = object : NsdManager.DiscoveryListener {
-            override fun onStartDiscoveryFailed(serviceType: String?, errorCode: Int) {
-                Log.w(TAG, "NSD discovery start failed: $errorCode")
-                stopNsdDiscovery()
-            }
-
-            override fun onStopDiscoveryFailed(serviceType: String?, errorCode: Int) {
-                Log.w(TAG, "NSD discovery stop failed: $errorCode")
-            }
-
-            override fun onDiscoveryStarted(serviceType: String?) {
-                Log.d(TAG, "NSD discovery started: $serviceType")
-            }
-
-            override fun onDiscoveryStopped(serviceType: String?) {
-                Log.d(TAG, "NSD discovery stopped")
-            }
-
-            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                Log.d(TAG, "NSD service found: ${serviceInfo.serviceName}")
-                resolveNsdService(serviceInfo)
-            }
-
-            override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-                Log.d(TAG, "NSD service lost: ${serviceInfo.serviceName}")
-                val key = serviceInfo.serviceName
-                deviceMap.remove(key)
-                updateDeviceList()
-            }
-        }
-
-        try {
-            nsdDiscoveryListener = listener
-            nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to start NSD discovery", e)
-            nsdDiscoveryListener = null
-        }
-    }
-
-    private fun resolveNsdService(serviceInfo: NsdServiceInfo) {
-        val nsd = nsdManager ?: return
-        try {
-            nsd.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                override fun onResolveFailed(serviceInfo: NsdServiceInfo?, errorCode: Int) {
-                    Log.w(TAG, "NSD resolve failed: $errorCode for ${serviceInfo?.serviceName}")
-                }
-
-                override fun onServiceResolved(resolved: NsdServiceInfo) {
-                    val hostAddress = resolved.host?.hostAddress ?: return
-                    val port = resolved.port
-                    val name = resolved.serviceName.replace("_livetype._tcp", "").trim()
-                    val sid = try {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                            resolved.attributes["sid"]?.let { String(it, Charsets.UTF_8) }
-                        } else null
-                    } catch (_: Exception) { null }
-
-                    val id = "$hostAddress:$port"
-                    registerDevice(
-                        DiscoveredDevice(
-                            id = id,
-                            name = if (name.isNotBlank()) name else "LiveType Desktop",
-                            host = hostAddress,
-                            port = port,
-                            sessionId = sid,
-                            lastSeenMs = System.currentTimeMillis()
-                        )
-                    )
-                }
-            })
-        } catch (e: Exception) {
-            Log.w(TAG, "Error resolving service", e)
-        }
-    }
-
-    private fun stopNsdDiscovery() {
-        nsdDiscoveryListener?.let { listener ->
-            try {
-                nsdManager?.stopServiceDiscovery(listener)
-            } catch (e: Exception) {
-                Log.w(TAG, "Error stopping NSD", e)
-            }
-            nsdDiscoveryListener = null
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // 2. UDP Beacon Probing (Fallback & Zero-Config High-Reliability Mode)
+    // UDP Beacon Probing — the one discovery path that exists on the wire
     // -------------------------------------------------------------------------
 
     private fun startUdpBeaconProbing() {
@@ -243,7 +142,7 @@ class NetworkDiscoveryManager(
 
                 // Periodic probe transmitter loop
                 val probePayload = JSONObject().apply {
-                    put("type", "livetype_discover")
+                    put("type", BeaconParser.PROBE_TYPE)
                     put("client", "LiveType-Android")
                     put("timestamp", System.currentTimeMillis())
                 }.toString().toByteArray(Charsets.UTF_8)
@@ -270,30 +169,7 @@ class NetworkDiscoveryManager(
     }
 
     private fun parseUdpBeaconMessage(rawJson: String, fallbackHost: String) {
-        try {
-            val json = JSONObject(rawJson)
-            val type = json.optString("type")
-            if (type == "livetype_beacon" || type == "livetype_pong") {
-                val host = json.optString("host", fallbackHost)
-                val port = json.optInt("port", 53017)
-                val name = json.optString("name", "LiveType Desktop")
-                val sid = json.optString("sessionId").takeIf { it.isNotBlank() }
-
-                val id = "$host:$port"
-                registerDevice(
-                    DiscoveredDevice(
-                        id = id,
-                        name = name,
-                        host = host,
-                        port = port,
-                        sessionId = sid,
-                        lastSeenMs = System.currentTimeMillis()
-                    )
-                )
-            }
-        } catch (_: Exception) {
-            // Non-JSON or foreign UDP packet
-        }
+        BeaconParser.parse(rawJson, fallbackHost)?.let(::registerDevice)
     }
 
     // -------------------------------------------------------------------------
