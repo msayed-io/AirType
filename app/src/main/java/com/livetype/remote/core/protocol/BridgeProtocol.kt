@@ -71,6 +71,8 @@ data class Envelope(
     }
 
     object Reasons {
+        /** Ack of a reset_stream: `appliedLength` is the mirror the server adopted. */
+        const val RESET = "reset"
         const val DUPLICATE = "duplicate"
         const val OLD = "old"
         const val RESYNC = "resync"

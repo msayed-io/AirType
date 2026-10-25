@@ -434,7 +434,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
             Envelope.Types.ACK -> {
                 session.onAck(env)
-                _ui.update { it.copy(opsSent = session.opsSent, revision = session.revision) }
+                // The reset ack reports the text the PC actually holds; only now can we
+                // rewrite it without leaving the un-acked tail in place (duplicate text).
+                session.onResetAck(env)?.let { rewrite -> conn.sendAll(listOf(rewrite)) }
+                _ui.update {
+                    it.copy(
+                        opsSent = session.opsSent,
+                        revision = session.revision,
+                        text = session.localText,
+                    )
+                }
             }
 
             Envelope.Types.RESET_STREAM -> {

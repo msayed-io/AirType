@@ -53,6 +53,14 @@ class StreamSession(
      */
     private val pendingEdits = sortedMapOf<Int, PendingEdit>()
     private var streamEnabled = true
+    private var awaitingResetAck = false
+
+    /**
+     * After "مسح النص" the phone deliberately stops tracking the text that is already
+     * on the PC. Its own text is then only a tail appended after an unknown prefix, so
+     * a resync may delete just that tail — never the whole field.
+     */
+    private var appendOnly = false
 
     // ---- pairing -------------------------------------------------------------
 
@@ -86,6 +94,7 @@ class StreamSession(
         lastSyncedText = ""
         lastSyncedRevision = revision
         pendingEdits.clear()
+        appendOnly = true
         return null
     }
 
@@ -154,21 +163,48 @@ class StreamSession(
     }
 
     /**
-     * After a reconnect (fresh server pump with an empty mirror, but the PC field
-     * still holds the old text): reset the server mirror to our last synced length,
-     * then rewrite the whole local text. Restores both mirror and field.
+     * After a reconnect the PC may hold more text than we ever got an ack for — an
+     * ack lost on the way back leaves [lastSyncedText] behind the real field. So the
+     * resync is two steps: we ask for the reset (our last synced length is only a
+     * hint) and we wait for the server's reset ack, which reports the mirror the PC
+     * actually holds. [onResetAck] then sends the single rewrite.
+     *
+     * Sending the rewrite together with the reset is what duplicated text: we would
+     * delete only the stale length and type the whole line again on top of the rest.
      */
     fun resyncAfterReconnect(): List<Envelope> {
         revision = 0
         lastSyncedRevision = 0
         pendingEdits.clear()
-        val mirrorLen = lastSyncedText.length
-        val reset = Envelope.resetStream(baselineRevision = 0, appliedLength = mirrorLen)
-        revision = 1
+        awaitingResetAck = true
+        return listOf(Envelope.resetStream(baselineRevision = 0, appliedLength = lastSyncedText.length))
+    }
+
+    /** True between [resyncAfterReconnect] and the server's reset ack. */
+    val isAwaitingResetAck: Boolean get() = awaitingResetAck
+
+    /**
+     * The server's answer to our reset: it tells us the mirror it adopted (which is
+     * never less than what it already typed). Delete exactly that and rewrite once.
+     */
+    fun onResetAck(env: Envelope): Envelope? {
+        if (!awaitingResetAck) return null
+        if (env.type != Envelope.Types.ACK || env.applied != true) return null
+        if (env.reason != Envelope.Reasons.RESET) return null
+
+        awaitingResetAck = false
+        val baseline = (env.baselineRevision ?: 0).coerceAtLeast(0)
+        // Normally we adopt the mirror the PC reports and rewrite the whole field. After
+        // a local clear we only own the tail we typed, so we delete just that much.
+        val mirrorLen =
+            if (appendOnly) lastSyncedText.length
+            else (env.appliedLength ?: lastSyncedText.length).coerceAtLeast(0)
+        revision = baseline + 1
+        lastSyncedRevision = baseline
+        pendingEdits.clear()
         opsSent++
         pendingEdits[revision] = PendingEdit(mirrorLen, localText, resultingText = localText)
-        val rewrite = Envelope.textEdit(revision, mirrorLen, localText, nowMs())
-        return listOf(reset, rewrite)
+        return Envelope.textEdit(revision, mirrorLen, localText, nowMs())
     }
 
     /** Resume after a local pause: server mirror == lastSynced, rewrite only the delta. */
