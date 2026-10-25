@@ -42,3 +42,20 @@
 
 [1]: https://github.com/android-actions/setup-android/blob/v3.2.2/README.md "android-actions/setup-android v3.2.2 README"
 [2]: https://github.com/android-actions/setup-android/blob/v3.2.2/action.yml "android-actions/setup-android v3.2.2 action metadata"
+
+## تحديث 2026-10-25 — الإصدار التلقائي عند الدفع
+
+كانت وظيفتا `signed_release` و`publish_release` مشروطتين بـ`github.event_name == 'workflow_dispatch'`،
+أي أن أي إصدار يحتاج تشغيلًا يدويًا. صار الشرط الآن مبنيًا على **الفرع + الالتزام** لا على نوع الحدث:
+
+- `push` إلى `main` (أو تشغيل يدوي على `main`) ⇒ إصدار موقّع منشور تلقائيًا.
+- طلب دمج أو أي فرع آخر ⇒ اختبارات وAPK تجريبي فقط، بلا لمس مفاتيح التوقيع.
+- الالتزام الذي يحمل وسم إصدار مستقر مسبقًا يُتخطّى، فلا إصدار مكرر عند إعادة التشغيل.
+
+`versionCode` لم يبقَ معتمدًا على `github.run_number` (كان يحرق أرقامًا ويجعل إعادة التشغيل تنتج رقمًا مختلفًا
+لنفس الإصدار)؛ أصبح مشتقًا حتميًا من رقم الإصدار: `major×1,000,000 + minor×1,000 + patch`، وهو أكبر من
+`versionCode=16` المنشور في `v1.0.3`، ويبقى تصاعديًا مع كل إصدار. وبناء release محليًا أو في أي سير آخر
+يفشل الآن صراحةً إن غاب `-PappVersionName` أو `-PappVersionCode` بدل الرجوع الصامت إلى القيم الافتراضية.
+
+لم يتغيّر `applicationId` ولا مفتاح التوقيع ولا أسماء ملفات الإصدار ولا أي ملف داخل `app/src/**`،
+لذلك لا أثر على بروتوكول الاقتران مع تطبيق ويندوز.

@@ -30,6 +30,20 @@ if (releaseBuildRequested && listOf(
     )
 }
 
+// A release artifact must never fall back to the gradle.properties defaults: a stale
+// versionCode would be rejected by Android as a downgrade, and a stale versionName would
+// mislabel a published build. The release workflow always passes both properties.
+if (releaseBuildRequested && (
+        providers.gradleProperty("appVersionCode").orNull.isNullOrBlank() ||
+            providers.gradleProperty("appVersionName").orNull.isNullOrBlank()
+        )
+) {
+    throw GradleException(
+        "Release builds require -PappVersionCode and -PappVersionName so the published " +
+            "version cannot silently fall back to the defaults."
+    )
+}
+
 android {
     namespace = "com.livetype.remote"
     compileSdk = 35
