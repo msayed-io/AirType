@@ -208,7 +208,7 @@ class RevisionOrderingTest {
     }
 
     @Test
-    fun `reconnect after lagging ack replaces only confirmed remote text`() {
+    fun `reconnect after lagging ack replaces exactly the mirror the PC reports`() {
         val s = session()
         s.onTextChanged("نص")
         s.onTextChanged("نص طويل")
@@ -216,9 +216,20 @@ class RevisionOrderingTest {
         s.onAck(Envelope(type = "ack", revision = 1, applied = true))
         s.onAck(Envelope(type = "ack", revision = 2, applied = true))
 
-        val msgs = s.resyncAfterReconnect()
-        assertEquals("نص طويل".length, msgs[1].deleteCount)
-        assertEquals("نص طويل جدا", msgs[1].insertText)
+        // Two-step: the reset asks, the ack answers with what the PC really holds.
+        val reset = s.resyncAfterReconnect().single()
+        assertEquals("reset_stream", reset.type)
+        assertEquals("نص طويل".length, reset.appliedLength)
+
+        val rewrite = s.onResetAck(Envelope(
+            type = "ack",
+            applied = true,
+            baselineRevision = 0,
+            appliedLength = "نص طويل جدا".length,
+            reason = "reset",
+        ))
+        assertEquals("نص طويل جدا".length, rewrite!!.deleteCount)
+        assertEquals("نص طويل جدا", rewrite.insertText)
     }
 
     @Test
@@ -251,27 +262,44 @@ class RevisionOrderingTest {
         s.onTextChanged("كامل النص المكتوب")
         // Only server-confirmed text counts: the ack makes revision 1 synced.
         s.onAck(Envelope(type = "ack", revision = 1, applied = true))
-        val msgs = s.resyncAfterReconnect()
-        assertEquals(2, msgs.size)
-        assertEquals("reset_stream", msgs[0].type)
-        assertEquals(0, msgs[0].baselineRevision)
+        val reset = s.resyncAfterReconnect().single()
+        assertEquals("reset_stream", reset.type)
+        assertEquals(0, reset.baselineRevision)
+
+        val rewrite = s.onResetAck(Envelope(
+            type = "ack",
+            applied = true,
+            baselineRevision = 0,
+            appliedLength = "كامل النص المكتوب".length,
+            reason = "reset",
+        ))
         // The PC field still holds the synced text; rewrite must delete that length first.
-        assertEquals("كامل النص المكتوب".length, msgs[1].deleteCount)
-        assertEquals("كامل النص المكتوب", msgs[1].insertText)
-        assertEquals(1, msgs[1].revision)
+        assertEquals("كامل النص المكتوب".length, rewrite!!.deleteCount)
+        assertEquals("كامل النص المكتوب", rewrite.insertText)
+        assertEquals(1, rewrite.revision)
     }
 
     @Test
-    fun `reconnect with unconfirmed ops deletes only the confirmed length`() {
+    fun `reconnect with an unacked op deletes what the PC typed, not the local belief`() {
         val s = session()
         s.onTextChanged("نص مؤكد")
         s.onAck(Envelope(type = "ack", revision = 1, applied = true))
-        // Sent but never acked (connection died) — must NOT be assumed applied.
+        // Sent but the ack died on the way back; the PC may well have typed it.
         s.onTextChanged("نص مؤكد وغير مؤكد")
-        val msgs = s.resyncAfterReconnect()
-        // Conservative: delete only what the server confirmed, never more.
-        assertEquals("نص مؤكد".length, msgs[1].deleteCount)
-        assertEquals("نص مؤكد وغير مؤكد", msgs[1].insertText)
+        val reset = s.resyncAfterReconnect().single()
+        // The hint is still only what we know for sure.
+        assertEquals("نص مؤكد".length, reset.appliedLength)
+
+        // The PC answers with its real mirror (both ops applied): delete that, not the hint.
+        val rewrite = s.onResetAck(Envelope(
+            type = "ack",
+            applied = true,
+            baselineRevision = 0,
+            appliedLength = "نص مؤكد وغير مؤكد".length,
+            reason = "reset",
+        ))
+        assertEquals("نص مؤكد وغير مؤكد".length, rewrite!!.deleteCount)
+        assertEquals("نص مؤكد وغير مؤكد", rewrite.insertText)
     }
 
     @Test
