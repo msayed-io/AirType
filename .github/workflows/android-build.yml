@@ -193,7 +193,11 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" \
             > "$RUNNER_TEMP/apk-signature-check.txt"
           bundle_verification="$(jarsigner -verify "$aab" 2>&1)"
-          printf '%s' "$bundle_verification" | grep -qi 'jar verified'
+          if [[ "${bundle_verification,,}" != *"jar verified"* ]]; then
+            printf '%s\n' "$bundle_verification" >&2
+            echo "AAB signature verification did not report a verified archive." >&2
+            exit 1
+          fi
 
           mkdir -p dist
           cp "$apk" "dist/AirType-${AIRTYPE_RELEASE_TAG}.apk"
