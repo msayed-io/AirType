@@ -60,7 +60,8 @@ class VoiceRecognitionManager(
                 SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "err_network"
                 SpeechRecognizer.ERROR_AUDIO -> "err_audio"
                 SpeechRecognizer.ERROR_SERVER -> "err_server_closing"
-                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "err_camera_denied"
+                // The dictation path needs the microphone, not the camera.
+                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "err_mic_denied"
                 else -> "err_generic"
             }
             onErrorOccurred(errCode)

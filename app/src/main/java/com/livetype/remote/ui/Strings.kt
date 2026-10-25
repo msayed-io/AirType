@@ -105,6 +105,7 @@ object Strings {
         "err_server_closing" to "أغلق الخادم الاتصال",
         "err_unsupported_version" to "إصدار هذا التطبيق أقدم من إصدار البرنامج على اللابتوب — حدّث التطبيق من صفحة الإصدارات ثم أعد المحاولة",
         "err_camera_denied" to "بدون إذن الكاميرا لا يمكن المسح — استخدم الإدخال اليدوي أو امنح الإذن",
+        "err_mic_denied" to "بدون إذن الميكروفون لا يمكن الإملاء الصوتي — امنح الإذن من إعدادات التطبيق أو اكتب بدلًا منه",
 
         "err_NOT_JSON" to "الرمز المقروء ليس رمز LiveType Bridge صالحًا",
         "err_WRONG_APP" to "هذا الرمز من تطبيق آخر، ليس رمز LiveType Bridge",
@@ -212,6 +213,7 @@ object Strings {
         "err_server_closing" to "The server closed the connection",
         "err_unsupported_version" to "This app version is older than the laptop app — update the phone app from the releases page and try again",
         "err_camera_denied" to "Without the camera permission, scanning is impossible — use manual entry or grant it",
+        "err_mic_denied" to "Without the microphone permission, voice dictation cannot work — grant it in the app settings or type instead",
 
         "err_NOT_JSON" to "The scanned code is not a valid LiveType Bridge code",
         "err_WRONG_APP" to "This code belongs to another app, not LiveType Bridge",
