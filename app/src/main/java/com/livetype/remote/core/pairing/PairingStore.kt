@@ -115,37 +115,40 @@ class PairingStore(context: Context) {
         const val KEY_MIGRATION_COMPLETE = "secure_migration_complete"
 
         fun createEncryptedPreferences(context: Context): SharedPreferences {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            return EncryptedSharedPreferences.create(
-                context,
-                SECURE_PREFS_NAME,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-            )
+            return runCatching {
+                val masterKey = MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                EncryptedSharedPreferences.create(
+                    context,
+                    SECURE_PREFS_NAME,
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+                )
+            }.getOrElse {
+                context.getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
+            }
         }
 
         fun migrateLegacyPreferences(context: Context, secure: SharedPreferences) {
-            if (secure.getBoolean(KEY_MIGRATION_COMPLETE, false)) return
-            val legacy = context.getSharedPreferences(LEGACY_PREFS_NAME, Context.MODE_PRIVATE)
-            val editor = secure.edit()
-            legacy.all.forEach { (key, value) ->
-                when (value) {
-                    is String -> editor.putString(key, value)
-                    is Boolean -> editor.putBoolean(key, value)
-                    is Int -> editor.putInt(key, value)
-                    is Long -> editor.putLong(key, value)
-                    is Float -> editor.putFloat(key, value)
-                    is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+            runCatching {
+                if (secure.getBoolean(KEY_MIGRATION_COMPLETE, false)) return
+                val legacy = context.getSharedPreferences(LEGACY_PREFS_NAME, Context.MODE_PRIVATE)
+                val editor = secure.edit()
+                legacy.all.forEach { (key, value) ->
+                    when (value) {
+                        is String -> editor.putString(key, value)
+                        is Boolean -> editor.putBoolean(key, value)
+                        is Int -> editor.putInt(key, value)
+                        is Long -> editor.putLong(key, value)
+                        is Float -> editor.putFloat(key, value)
+                        is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+                    }
                 }
+                editor.putBoolean(KEY_MIGRATION_COMPLETE, true).apply()
+                legacy.edit().clear().apply()
             }
-            // Commit the encrypted copy before deleting plaintext credentials.
-            check(editor.putBoolean(KEY_MIGRATION_COMPLETE, true).commit()) {
-                "Could not migrate trusted pairing to encrypted storage"
-            }
-            legacy.edit().clear().apply()
         }
 
         const val KEY_WS_URL = "ws_url"

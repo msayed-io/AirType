@@ -90,17 +90,19 @@ import com.livetype.remote.ui.components.TactileCard
 import com.livetype.remote.ui.theme.LiveTypeTokens
 
 fun vibrateClick(context: Context) {
-    val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
-    } else {
-        @Suppress("DEPRECATION")
-        context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-    }
-    if (vibrator?.hasVibrator() != true) return
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
-    } else {
-        vibrator.vibrate(VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE))
+    runCatching {
+        val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+        if (vibrator?.hasVibrator() != true) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
+        } else {
+            vibrator.vibrate(VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE))
+        }
     }
 }
 
@@ -173,9 +175,8 @@ fun AppRoot(vm: AppViewModel = androidx.lifecycle.viewmodel.compose.viewModel())
             Box(Modifier.fillMaxSize()) {
                 when (ui.screen) {
                     Screen.SCANNER -> QrScannerScreen(vm)
-                    Screen.MANUAL_ENTRY -> ManualEntryScreen(vm)
                     Screen.CONNECTED -> ConnectedScreen(vm)
-                    Screen.DIAGNOSTICS -> DiagnosticsScreen(vm)
+                    Screen.SETTINGS -> SettingsScreen(vm)
                     else -> WelcomeScreen(vm)
                 }
 
@@ -343,30 +344,6 @@ fun WelcomeScreen(vm: AppViewModel) {
                         )
                     }
 
-                    Spacer(Modifier.height(12.dp))
-
-                    // Secondary 2-Column Action Cards
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        LiveTypeSecondaryButton(
-                            text = s("manual_entry"),
-                            icon = Icons.Default.Dialpad,
-                            onClick = { vm.goManualEntry() },
-                            modifier = Modifier.weight(1f),
-                            height = 50.dp,
-                        )
-
-                        LiveTypeSecondaryButton(
-                            text = s("diagnostics"),
-                            icon = Icons.Default.Router,
-                            onClick = { vm.goDiagnostics() },
-                            modifier = Modifier.weight(1f),
-                            height = 50.dp,
-                        )
-                    }
-
                     Spacer(Modifier.height(20.dp))
 
                     // Security Footer Capsule
@@ -407,12 +384,10 @@ fun WelcomeScreen(vm: AppViewModel) {
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            LiveTypeTokens.BgContainer.copy(alpha = 0.96f),
-                            LiveTypeTokens.BgContainer.copy(alpha = 0.7f),
+                            LiveTypeTokens.BgContainer.copy(alpha = 0.98f),
+                            LiveTypeTokens.BgContainer.copy(alpha = 0.85f),
                             Color.Transparent,
-                        ),
-                        startY = 0f,
-                        endY = 180f,
+                        )
                     )
                 )
                 .statusBarsPadding()
@@ -430,154 +405,9 @@ fun WelcomeScreen(vm: AppViewModel) {
                 DarkGraphiteIconButton(
                     icon = Icons.Default.Settings,
                     contentDescription = s("settings_title"),
-                    onClick = { vm.goDiagnostics() },
+                    onClick = { vm.goSettings() },
                     size = 46.dp,
                 )
-            }
-        }
-    }
-}
-
-@Composable
-fun ManualEntryScreen(vm: AppViewModel) {
-    val ui by vm.ui.collectAsState()
-    var host by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf("53017") }
-    var sid by remember { mutableStateOf("") }
-    var pin by remember { mutableStateOf("") }
-
-    BackHandler { vm.goHome() }
-
-    Box(Modifier.fillMaxSize()) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .statusBarsPadding()
-                .padding(top = 80.dp), // Clears the floating top navigation capsules
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
-                TactileCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = LiveTypeTokens.CardShapeLarge,
-                    backgroundColor = LiveTypeTokens.BgSurfaceWhite,
-                    borderColor = LiveTypeTokens.BorderSubtle,
-                ) {
-                    Column(modifier = Modifier.padding(20.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(
-                                text = s("manual_entry_title"),
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    color = LiveTypeTokens.TextPrimary,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 17.sp,
-                                ),
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .clip(CircleShape)
-                                    .background(LiveTypeTokens.AccentPeriwinkleBg)
-                                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                            ) {
-                                Text(
-                                    text = "IP & PIN",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = LiveTypeTokens.AccentPeriwinkleDeep,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 10.sp,
-                                    ),
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(16.dp))
-
-                        LiveTypeInput(
-                            value = host,
-                            onValueChange = { host = it.trim() },
-                            label = s("host"),
-                            placeholder = "192.168.1.100",
-                            leadingIcon = Icons.Default.Router,
-                        )
-                        Spacer(Modifier.height(14.dp))
-
-                        LiveTypeInput(
-                            value = port,
-                            onValueChange = { port = it.filter { c -> c.isDigit() }.take(5) },
-                            label = s("port"),
-                            placeholder = "53017",
-                            leadingIcon = Icons.Default.Numbers,
-                        )
-                        Spacer(Modifier.height(14.dp))
-
-                        LiveTypeInput(
-                            value = sid,
-                            onValueChange = { sid = it.trim() },
-                            label = s("session_id"),
-                            placeholder = "c34d6bb9...",
-                            leadingIcon = Icons.Default.VpnKey,
-                        )
-                        Spacer(Modifier.height(14.dp))
-
-                        LiveTypeInput(
-                            value = pin,
-                            onValueChange = { pin = it.filter { c -> c.isDigit() }.take(6) },
-                            label = s("pin"),
-                            placeholder = "123456",
-                            leadingIcon = Icons.Default.Pin,
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(16.dp))
-                LiquidErrorBanner(ui.lastError)
-                if (!ui.lastError.isNullOrBlank()) Spacer(Modifier.height(10.dp))
-
-                LiveTypePrimaryButton(
-                    text = s("connect"),
-                    icon = Icons.Default.Wifi,
-                    enabled = host.isNotBlank() && port.isNotBlank() && sid.isNotBlank() && pin.isNotBlank(),
-                    onClick = { vm.connectManual(host, port.toIntOrNull() ?: 0, sid, pin) },
-                )
-
-                Spacer(Modifier.height(28.dp))
-            }
-        }
-
-        // Pinned Top Glass Bar (Two-sided: Back on Start edge, Title on End edge)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.TopCenter)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            LiveTypeTokens.BgContainer.copy(alpha = 0.96f),
-                            LiveTypeTokens.BgContainer.copy(alpha = 0.7f),
-                            Color.Transparent,
-                        ),
-                        startY = 0f,
-                        endY = 180f,
-                    )
-                )
-                .statusBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 10.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                LiquidGlassIconButton(
-                    icon = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = s("back"),
-                    onClick = { vm.goHome() },
-                )
-
-                LiquidGlassTitlePill(title = s("manual_entry_title"))
             }
         }
     }

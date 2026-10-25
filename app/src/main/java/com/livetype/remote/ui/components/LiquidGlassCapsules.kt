@@ -73,14 +73,6 @@ fun LiquidGlassCapsule(
             )
             .clip(CircleShape)
             .background(backgroundColor)
-            .drawWithContent {
-                drawContent()
-                // Top half specular gloss lens reflection
-                drawRect(
-                    brush = LiveTypeTokens.GlassShimmerBrush,
-                    size = Size(this.size.width, this.size.height * 0.55f),
-                )
-            }
             .border(
                 width = 1.2.dp,
                 brush = LiveTypeTokens.GlassSpecularBorderBrush,
@@ -154,18 +146,6 @@ fun DarkGraphiteIconButton(
             )
             .clip(CircleShape)
             .background(LiveTypeTokens.DarkCtaGradient)
-            .drawWithContent {
-                drawContent()
-                drawRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.25f),
-                            Color.Transparent,
-                        )
-                    ),
-                    size = Size(this.size.width, this.size.height * 0.5f),
-                )
-            }
             .border(
                 width = 1.dp,
                 brush = Brush.verticalGradient(

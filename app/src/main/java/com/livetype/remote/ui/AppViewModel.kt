@@ -22,7 +22,7 @@ import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
-enum class Screen { WELCOME, MANUAL_ENTRY, SCANNER, CONNECTED, DIAGNOSTICS }
+enum class Screen { WELCOME, SCANNER, CONNECTED, SETTINGS }
 
 enum class InputMode { VOICE_STUDIO, KEYBOARD }
 
@@ -231,14 +231,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---- navigation ---------------------------------------------------------
 
     fun goScanner() = setScreen(Screen.SCANNER)
-    fun goManualEntry() = setScreen(Screen.MANUAL_ENTRY)
     fun goHome() {
         hasAutoConnectedThisSession = false
         discoveryManager.startDiscovery()
         setScreen(Screen.WELCOME)
     }
-    fun goDiagnostics() = setScreen(Screen.DIAGNOSTICS)
-    fun backFromDiagnostics() =
+    fun goSettings() = setScreen(Screen.SETTINGS)
+    fun backFromSettings() =
         setScreen(if (connection?.state?.value?.state == ConnState.PAIRED) Screen.CONNECTED else Screen.WELCOME)
 
     private fun setScreen(screen: Screen) = _ui.update { it.copy(screen = screen, lastError = null, isAutoConnecting = false) }
@@ -283,7 +282,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(selectedDeviceForPin = null) }
         val sid = device.sessionId ?: "session_${System.currentTimeMillis()}"
         currentPcName = device.name
-        connectManual(device.host, device.port, sid, pin)
+        val wsUrl = "ws://${device.host}:${device.port}/livetype"
+        beginPairing(
+            PairingInfo(wsUrl, device.host, device.port, sid, pin, 0L),
+            token = null,
+            pcName = device.name
+        )
     }
 
     // ---- pairing ------------------------------------------------------------
@@ -298,25 +302,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun connectManual(host: String, port: Int, sessionId: String, pin: String) {
-        val result = QrPayloadParser.fromManual(
-            host, port, sessionId, pin,
-            0L, // 0 = permanent trusted session
-        )
-        when (result) {
-            is QrParseResult.Ok -> beginPairing(result.info)
-            is QrParseResult.Invalid -> _ui.update {
-                it.copy(screen = Screen.MANUAL_ENTRY, lastError = result.reason.name)
-            }
-        }
-    }
-
     fun reconnectSaved() {
         val saved = store.load() ?: return
+        val liveDevice = _ui.value.discoveredDevices.firstOrNull { it.host.equals(saved.host, ignoreCase = true) }
+        val sid = liveDevice?.sessionId?.takeIf { it.isNotBlank() } ?: saved.sessionId
+        val port = liveDevice?.port ?: saved.port
+        val wsUrl = "ws://${saved.host}:$port/livetype"
         beginPairing(
-            PairingInfo(saved.wsUrl, saved.host, saved.port, saved.sessionId, saved.pin, 0L),
+            PairingInfo(wsUrl, saved.host, port, sid, saved.pin, 0L),
             token = saved.token.takeIf { it.isNotBlank() },
-            pcName = saved.deviceName
+            pcName = liveDevice?.name ?: saved.deviceName
         )
     }
 

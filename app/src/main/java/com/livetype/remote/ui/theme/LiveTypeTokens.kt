@@ -98,13 +98,13 @@ object LiveTypeTokens {
 
     // --- Semantic States ---
     val StateSuccess = Color(0xFF10B981)
-    val StateSuccessContainer = Color(0x1F10B981)
+    val StateSuccessContainer = Color(0xFFE6F4EA)
     val StateWarning = Color(0xFFF59E0B)
-    val StateWarningContainer = Color(0x1FF59E0B)
+    val StateWarningContainer = Color(0xFFFEF7E0)
     val StateError = Color(0xFFEF4444)
-    val StateErrorContainer = Color(0x18EF4444)
+    val StateErrorContainer = Color(0xFFFCE8E6)
     val StatePaused = Color(0xFF7A808C)
-    val StatePausedContainer = Color(0x1F7A808C)
+    val StatePausedContainer = Color(0xFFF1F3F4)
 
     // --- Text Hierarchy ---
     val TextPrimary = Color(0xFF181A1F)

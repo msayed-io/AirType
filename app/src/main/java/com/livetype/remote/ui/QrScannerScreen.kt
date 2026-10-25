@@ -310,15 +310,6 @@ fun QrScannerScreen(vm: AppViewModel) {
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
-
-                // Fallback: Manual Entry Button
-                LiveTypeSecondaryButton(
-                    text = s("manual_entry"),
-                    icon = Icons.Default.Dialpad,
-                    onClick = { vm.goManualEntry() },
-                )
-
                 Spacer(Modifier.height(30.dp))
             }
         }
@@ -331,12 +322,10 @@ fun QrScannerScreen(vm: AppViewModel) {
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            LiveTypeTokens.BgContainer.copy(alpha = 0.96f),
-                            LiveTypeTokens.BgContainer.copy(alpha = 0.7f),
+                            LiveTypeTokens.BgContainer.copy(alpha = 0.98f),
+                            LiveTypeTokens.BgContainer.copy(alpha = 0.85f),
                             Color.Transparent,
-                        ),
-                        startY = 0f,
-                        endY = 180f,
+                        )
                     )
                 )
                 .statusBarsPadding()
