@@ -19,7 +19,7 @@ object Strings {
         "ready_to_pair" to "جاهز للربط",
         "pc_open_tip" to "تأكد من فتح تطبيق AirType على حاسوبك",
         "active_now" to "نشط الآن",
-        "end_to_end_secure" to "اتصال محلي مشفر end-to-end وسريع الاستجابة",
+        "end_to_end_secure" to "اتصال محلي مباشر داخل شبكتك، بلا إنترنت — سرعة الاستجابة تعتمد على شبكة الواي فاي",
 
         "status_connected" to "متصل",
         "status_connecting" to "جارٍ الاقتران…",
@@ -103,6 +103,7 @@ object Strings {
         "err_unexpected_message" to "رد غير متوقع من الخادم — تأكد من تحديث البرنامجين",
         "err_malformed_message" to "رسالة تالفة — أعد الاقتران",
         "err_server_closing" to "أغلق الخادم الاتصال",
+        "err_unsupported_version" to "إصدار هذا التطبيق أقدم من إصدار البرنامج على اللابتوب — حدّث التطبيق من صفحة الإصدارات ثم أعد المحاولة",
         "err_camera_denied" to "بدون إذن الكاميرا لا يمكن المسح — استخدم الإدخال اليدوي أو امنح الإذن",
 
         "err_NOT_JSON" to "الرمز المقروء ليس رمز LiveType Bridge صالحًا",
@@ -126,7 +127,7 @@ object Strings {
         "ready_to_pair" to "Ready to pair",
         "pc_open_tip" to "Make sure AirType is open on your computer",
         "active_now" to "Active now",
-        "end_to_end_secure" to "Fast end-to-end encrypted local connection",
+        "end_to_end_secure" to "Direct local connection inside your own network, no Internet — speed depends on your Wi-Fi",
 
         "status_connected" to "Connected",
         "status_connecting" to "Pairing…",
@@ -209,6 +210,7 @@ object Strings {
         "err_unexpected_message" to "Unexpected server reply — update both apps",
         "err_malformed_message" to "Corrupted message — pair again",
         "err_server_closing" to "The server closed the connection",
+        "err_unsupported_version" to "This app version is older than the laptop app — update the phone app from the releases page and try again",
         "err_camera_denied" to "Without the camera permission, scanning is impossible — use manual entry or grant it",
 
         "err_NOT_JSON" to "The scanned code is not a valid LiveType Bridge code",

@@ -26,7 +26,7 @@ This inventory catalogs 100% of screens, states, dialogs, and components in AirT
     - "إدخال يدوي" / "Manual entry"
     - "التشخيص" / "Diagnostics"
 - **Security Footer Strip:**
-  - End-to-end encrypted local badge
+  - Local direct-connection badge (no encryption claim: the transport is plain local WebSocket)
 
 ---
 

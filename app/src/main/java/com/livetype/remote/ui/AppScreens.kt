@@ -141,6 +141,8 @@ fun errorText(codeOrMessage: String): String {
         "malformed_message" to "err_malformed_message",
         "message_too_large" to "err_malformed_message",
         "server_closing" to "err_server_closing",
+        "unsupported_version" to "err_unsupported_version",
+        "UNSUPPORTED_VERSION" to "err_unsupported_version",
         "camera_denied" to "err_camera_denied",
         "NOT_JSON" to "err_NOT_JSON",
         "WRONG_APP" to "err_WRONG_APP",
