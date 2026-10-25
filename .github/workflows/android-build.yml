@@ -275,5 +275,6 @@ jobs:
             release/SHA256SUMS release/BUILD-INFO.txt \
             --target "$GITHUB_SHA" \
             --title "AirType $RELEASE_TAG" \
-            --notes-file "$RUNNER_TEMP/release-notes.md"
-          gh release view "$RELEASE_TAG" --json tagName,url,assets
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --repo "$GITHUB_REPOSITORY"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,url,assets
