@@ -5,6 +5,31 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val configuredVersionCode = providers.gradleProperty("appVersionCode")
+    .map { it.toInt() }
+    .getOrElse(3)
+val configuredVersionName = providers.gradleProperty("appVersionName").getOrElse("1.0.2")
+
+val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+val releaseKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+val releaseBuildRequested = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+if (releaseBuildRequested && listOf(
+        releaseKeystorePath,
+        releaseKeystorePassword,
+        releaseKeyAlias,
+        releaseKeyPassword,
+    ).any { it.isNullOrBlank() }
+) {
+    throw GradleException(
+        "Release signing requires ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, " +
+            "ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD."
+    )
+}
+
 android {
     namespace = "com.livetype.remote"
     compileSdk = 35
@@ -13,12 +38,24 @@ android {
         applicationId = "com.livetype.remote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = configuredVersionCode
+        versionName = configuredVersionName
+    }
+
+    signingConfigs {
+        create("release") {
+            if (!releaseKeystorePath.isNullOrBlank()) {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

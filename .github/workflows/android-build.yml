@@ -1,47 +1,263 @@
-name: Android CI
+name: Android CI and Signed Release
 
 on:
   push:
     branches: [ main, master ]
   pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: airtype-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build:
-    name: Unit tests + Debug APK
-    runs-on: ubuntu-latest
+  verify:
+    name: Unit tests and debug APK
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@d9c87d481d55275bb5441eef3fe0e46805f9ef70 # v3.5.0
         with:
           gradle-version: '8.9'
 
-      - name: Ensure Android SDK components
+      - name: Install Android SDK packages
         run: |
-          yes | sdkmanager "platforms;android-35" "build-tools;34.0.0" > /dev/null 2>&1 || true
+          set -euo pipefail
+          command -v sdkmanager
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
 
-      - name: Unit tests
-        run: gradle :app:testDebugUnitTest --stacktrace --no-daemon
+      - name: Run unit tests and build debug APK
+        run: gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:assembleDebug
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace --no-daemon
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload debug APK for CI runs
+        if: github.event_name != 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: LiveTypeRemote-debug-apk
+          name: AirType-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+  signed_release:
+    name: Build and sign release APK and AAB
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment:
+      name: android-release
+    permissions:
+      contents: read
+    outputs:
+      version_name: ${{ steps.version.outputs.name }}
+      version_code: ${{ steps.version.outputs.code }}
+      release_tag: ${{ steps.version.outputs.tag }}
+      artifact_name: ${{ steps.version.outputs.artifact }}
+    steps:
+      - name: Checkout source and tags
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@d9c87d481d55275bb5441eef3fe0e46805f9ef70 # v3.5.0
+        with:
+          gradle-version: '8.9'
+
+      - name: Install Android SDK packages
+        run: |
+          set -euo pipefail
+          command -v sdkmanager
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Calculate next stable SemVer and Android versionCode
+        id: version
+        env:
+          BASE_VERSION: '1.0.2'
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          baseline = tuple(int(part) for part in os.environ["BASE_VERSION"].split("."))
+          pattern = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+          stable_versions = [baseline]
+          for tag in subprocess.check_output(["git", "tag", "--list"], text=True).splitlines():
+              match = pattern.fullmatch(tag)
+              if match:
+                  stable_versions.append(tuple(int(part) for part in match.groups()))
+
+          major, minor, patch = max(stable_versions)
+          patch += 1
+          version_name = f"{major}.{minor}.{patch}"
+          version_code = max(int(os.environ["RUN_NUMBER"]), 4)
+          if version_code > 2_100_000_000:
+              raise SystemExit("GitHub run number exceeds Android's supported versionCode limit")
+
+          tag = f"v{version_name}"
+          artifact = f"AirType-release-{tag}-code{version_code}"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"name={version_name}\n")
+              output.write(f"code={version_code}\n")
+              output.write(f"tag={tag}\n")
+              output.write(f"artifact={artifact}\n")
+          print(f"Release version: {tag}; Android versionCode: {version_code}")
+          PY
+
+      - name: Materialize and validate protected signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          : "${KEYSTORE_BASE64:?Missing ANDROID_KEYSTORE_BASE64 in android-release environment}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?Missing ANDROID_KEYSTORE_PASSWORD in android-release environment}"
+          : "${ANDROID_KEY_ALIAS:?Missing ANDROID_KEY_ALIAS in android-release environment}"
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/airtype-release.jks"
+          test -s "$RUNNER_TEMP/airtype-release.jks"
+          keytool -list -keystore "$RUNNER_TEMP/airtype-release.jks" \
+            -storetype JKS -storepass:env ANDROID_KEYSTORE_PASSWORD \
+            -alias "$ANDROID_KEY_ALIAS" >/dev/null
+
+      - name: Build signed release APK and Play bundle
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/airtype-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          AIRTYPE_VERSION_NAME: ${{ steps.version.outputs.name }}
+          AIRTYPE_VERSION_CODE: ${{ steps.version.outputs.code }}
+        run: |
+          set -euo pipefail
+          : "${ANDROID_KEY_PASSWORD:?Missing ANDROID_KEY_PASSWORD in android-release environment}"
+          gradle --no-daemon --stacktrace clean :app:assembleRelease :app:bundleRelease \
+            -PappVersionName="$AIRTYPE_VERSION_NAME" \
+            -PappVersionCode="$AIRTYPE_VERSION_CODE"
+
+      - name: Verify signatures and prepare release files
+        env:
+          AIRTYPE_VERSION_NAME: ${{ steps.version.outputs.name }}
+          AIRTYPE_VERSION_CODE: ${{ steps.version.outputs.code }}
+          AIRTYPE_RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/release/app-release.apk"
+          aab="app/build/outputs/bundle/release/app-release.aab"
+          test -s "$apk"
+          test -s "$aab"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" \
+            > "$RUNNER_TEMP/apk-signature-check.txt"
+          bundle_verification="$(jarsigner -verify "$aab" 2>&1)"
+          printf '%s' "$bundle_verification" | grep -qi 'jar verified'
+
+          mkdir -p dist
+          cp "$apk" "dist/AirType-${AIRTYPE_RELEASE_TAG}.apk"
+          cp "$aab" "dist/AirType-${AIRTYPE_RELEASE_TAG}.aab"
+          {
+            printf 'version=%s\n' "$AIRTYPE_RELEASE_TAG"
+            printf 'versionName=%s\n' "$AIRTYPE_VERSION_NAME"
+            printf 'versionCode=%s\n' "$AIRTYPE_VERSION_CODE"
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'workflowRun=%s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+          } > dist/BUILD-INFO.txt
+          (
+            cd dist
+            sha256sum "AirType-${AIRTYPE_RELEASE_TAG}.apk" "AirType-${AIRTYPE_RELEASE_TAG}.aab" BUILD-INFO.txt > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+
+      - name: Upload signed release outputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.version.outputs.artifact }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/airtype-release.jks" "$RUNNER_TEMP/apk-signature-check.txt"
+
+  publish_release:
+    name: Create GitHub Release
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: signed_release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download this run's signed release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.signed_release.outputs.artifact_name }}
+          path: release
+
+      - name: Verify release file checksums
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum --check SHA256SUMS
+          test -s "AirType-${{ needs.signed_release.outputs.release_tag }}.apk"
+          test -s "AirType-${{ needs.signed_release.outputs.release_tag }}.aab"
+
+      - name: Publish versioned GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.signed_release.outputs.release_tag }}
+          RELEASE_VERSION_NAME: ${{ needs.signed_release.outputs.version_name }}
+          RELEASE_VERSION_CODE: ${{ needs.signed_release.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          Automated Android release built and signed by GitHub Actions.
+
+          - Semantic version: $RELEASE_TAG
+          - Android versionCode: $RELEASE_VERSION_CODE
+          - Source commit: $GITHUB_SHA
+          - Installable APK: AirType-$RELEASE_TAG.apk
+          - Google Play bundle (AAB): AirType-$RELEASE_TAG.aab
+          - SHA-256 checksums and build metadata are attached.
+          EOF
+          gh release create "$RELEASE_TAG" \
+            "release/AirType-${RELEASE_TAG}.apk" \
+            "release/AirType-${RELEASE_TAG}.aab" \
+            release/SHA256SUMS release/BUILD-INFO.txt \
+            --target "$GITHUB_SHA" \
+            --title "AirType $RELEASE_TAG" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          gh release view "$RELEASE_TAG" --json tagName,url,assets

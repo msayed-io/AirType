@@ -24,17 +24,20 @@ app/src/test/    # اختبارات JVM: التوافق مع البروتوكو�
 
 ## بناء الـ APK
 
-### عبر GitHub Actions (الموصى به)
-المستودع يحتوي `.github/workflows/android-build.yml` — عند أي push أو من تبويب Actions بضغطة "Run workflow" يتم:
-1. تشغيل اختبارات الوحدة.
-2. بناء `app-debug.apk` (قابل للتثبيت مباشرة على الهاتف).
-3. رفعه كـ Artifact باسم `LiveTypeRemote-debug-apk` — نزّله من صفحة الـ Run.
+### عبر GitHub Actions
+الملف `.github/workflows/android-build.yml` يشغّل اختبارات الوحدة ويبني APK تجريبيًا عند الـ push وطلبات الدمج. لإنشاء إصدار رسمي، افتح **Actions → Android CI and Signed Release → Run workflow** واختر الفرع `main`. في التشغيل نفسه سيقوم المسار بـ:
+1. تشغيل الاختبارات وبناء APK التجريبي.
+2. حساب رقم SemVer التالي تلقائيًا؛ الإصدار الأول بعد خط الأساس الحالي `1.0.2` هو `v1.0.3`، وبعدها تزيد قيمة patch اعتمادًا على أحدث وسم إصدار مستقر.
+3. بناء APK موقّع قابل للتثبيت وAAB موقّع للنشر في Google Play، مع `versionCode` متزايد وملفات SHA-256.
+4. نشر وسم GitHub Release وإرفاق الملفات من التشغيل نفسه، بعد نجاح الاختبارات والتحقق من التوقيع.
+
+مفاتيح التوقيع لا تُحفظ في الشيفرة أو ملفات المستودع. تُقرأ فقط من أسرار GitHub المشفّرة داخل بيئة `android-release`: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. البيئة مقيّدة بفرع `main`.
 
 ### بناء محلي (اختياري)
-يتطلب JDK 17 + Android SDK (compileSdk 35):
+يتطلب JDK 17 + Gradle 8.9 + Android SDK (compileSdk 35):
 ```
-gradle :app:testDebugUnitTest
-gradle :app:assembleDebug
+gradle --no-daemon :app:testDebugUnitTest
+gradle --no-daemon :app:assembleDebug
 # الناتج: app/build/outputs/apk/debug/app-debug.apk
 ```
 
