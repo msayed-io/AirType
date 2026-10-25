@@ -136,6 +136,9 @@ class BridgeConnection(
             val env = BridgeJson.decode(text) ?: return
             when (env.type) {
                 Envelope.Types.SESSION_READY -> {
+                    // A newer desktop is intentionally still accepted here: every protocol
+                    // change is additive, so an old phone keeps working with it. Only a
+                    // QR that demands a newer protocol is refused (see QrPayloadParser).
                     authRef.set(env.token)
                     val wasReconnect = isReconnect
                     _state.value = _state.value.copy(
@@ -251,6 +254,8 @@ class BridgeConnection(
             Envelope.Errors.SESSION_EXPIRED,
             Envelope.Errors.ALREADY_PAIRED,
             Envelope.Errors.BAD_TOKEN,
+            // The desktop speaks a newer protocol than this build: retrying cannot help.
+            Envelope.Errors.UNSUPPORTED_VERSION,
         )
     }
 }

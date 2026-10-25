@@ -76,8 +76,8 @@ gradle --no-daemon :app:assembleRelease :app:bundleRelease \
 ## بروتوكول الرسائل (نفس عقد تطبيق ويندوز)
 | رسالة | الاتجاه | حقول أساسية |
 |---|---|---|
-| `pair_request` | هاتف→كمبيوتر | أول مرة: sessionId, pin, deviceName, clientId — لاحقًا: sessionId, clientId, token |
-| `session_ready` | كمبيوتر→هاتف | ok, token, heartbeatIntervalMs |
+| `pair_request` | هاتف→كمبيوتر | أول مرة: sessionId, pin, deviceName, clientId — لاحقًا: sessionId, clientId, token — وفي الحالتين: protocolVersion |
+| `session_ready` | كمبيوتر→هاتف | ok, token, heartbeatIntervalMs, protocolVersion |
 | `text_edit` | هاتف→كمبيوتر | token, revision, deleteCount, insertText, timestamp |
 | `ack` | كمبيوتر→هاتف | revision, applied, reason |
 | `reset_stream` | بالاتجاهين | baselineRevision, appliedLength |
@@ -85,3 +85,10 @@ gradle --no-daemon :app:assembleRelease :app:bundleRelease \
 | `disconnect` / `error` | بالاتجاهين | reason / errorCode |
 
 كل الحقول camelCase مثلما ينتجها `System.Text.Json` في تطبيق الويندوز، واختبار `ProtocolCompatTest` يثبّت هذا الشكل.
+
+### تفاوض إصدار البروتوكول
+- الإصدار الحالي للبروتوكول هو **1**، معرّف في `Envelope.ProtocolVersion.CURRENT`.
+- رمز QR يحمل الحقل `v`. غيابه يعني الإصدار 1، وإن كان أعلى من إصدار التطبيق يرفضه التطبيق برسالة واضحة تطلب التحديث (`UNSUPPORTED_VERSION`) بدل محاولة اتصال بعقد غير مفهوم.
+- طلب الاقتران يرسل `protocolVersion`، ويرد الويندوز بالحقل نفسه في `session_ready`. الطرف الذي لا يجد الحقل يعتبره 1.
+- إن أرسل هاتف إصدارًا أعلى من إصدار الويندوز يرد الأخير بخطأ `unsupported_version` ويعامله الهاتف كخطأ نهائي فلا يعيد المحاولة تلقائيًا.
+- كل التغييرات في هذا العقد إضافية: هاتف قديم مع ويندوز جديد، وويندوز قديم مع هاتف جديد، يعملان كما هما.

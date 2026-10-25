@@ -34,6 +34,11 @@ data class Envelope(
     val backspaces: Int? = null,
     val inserts: Int? = null,
     val receivedAtUtc: Long? = null,
+    /**
+     * Optional negotiation field. Absent on the wire means protocol 1, so a peer
+     * that predates it keeps working unchanged in both directions.
+     */
+    val protocolVersion: Int? = null,
 ) {
     object Types {
         const val PAIR_REQUEST = "pair_request"
@@ -47,6 +52,11 @@ data class Envelope(
         const val ERROR = "error"
     }
 
+    /** Highest wire protocol this build speaks. Bump only with a coordinated release. */
+    object ProtocolVersion {
+        const val CURRENT = 1
+    }
+
     object Errors {
         const val BAD_PIN = "bad_pin"
         const val UNKNOWN_SESSION = "unknown_session"
@@ -57,6 +67,7 @@ data class Envelope(
         const val MALFORMED = "malformed_message"
         const val TOO_LARGE = "message_too_large"
         const val SERVER_CLOSING = "server_closing"
+        const val UNSUPPORTED_VERSION = "unsupported_version"
     }
 
     object Reasons {
@@ -85,6 +96,7 @@ data class Envelope(
             deviceName = deviceName,
             token = token?.takeIf { it.isNotBlank() },
             clientId = clientId?.takeIf { it.isNotBlank() },
+            protocolVersion = ProtocolVersion.CURRENT,
         )
 
         fun textEdit(revision: Int, deleteCount: Int, insertText: String, nowMs: Long) = Envelope(

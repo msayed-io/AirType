@@ -48,6 +48,60 @@ class ProtocolCompatTest {
     }
 
     @Test
+    fun `pair_request advertises protocol version 1`() {
+        val json = BridgeJson.encode(Envelope.pairRequest("sid123", "431552", "Pixel", clientId = "android_x"))
+        assertTrue(json.contains("\"protocolVersion\":1"))
+        // The field is additive: a build that predates it simply never sees it.
+        val decoded = BridgeJson.decode("""{"type":"pair_request","sessionId":"s","pin":"123456","deviceName":"Pixel"}""")
+        assertNull(decoded?.protocolVersion)
+    }
+
+    @Test
+    fun `session_ready without protocolVersion is treated as protocol 1`() {
+        val env = BridgeJson.decode("""{"type":"session_ready","ok":true,"token":"abc","heartbeatIntervalMs":2500}""")
+        assertNotNull(env)
+        assertEquals(
+            Envelope.ProtocolVersion.CURRENT,
+            env!!.protocolVersion ?: Envelope.ProtocolVersion.CURRENT,
+        )
+    }
+
+    @Test
+    fun `unsupported_version error is decoded and recognised`() {
+        val env = BridgeJson.decode("""{"type":"error","errorCode":"unsupported_version","errorMessage":"newer"}""")
+        assertNotNull(env)
+        assertEquals(Envelope.Errors.UNSUPPORTED_VERSION, env!!.errorCode)
+        assertEquals("unsupported_version", Envelope.Errors.UNSUPPORTED_VERSION)
+    }
+
+    @Test
+    fun `qr without a version field is accepted as protocol 1`() {
+        val result = QrPayloadParser.parse(
+            """{"app":"LiveTypeBridge","host":"192.168.1.5","port":53017,"sid":"abc","pin":"123456","exp":9999999999999}""",
+            nowMs = 1_000_000L,
+        )
+        assertTrue(result is QrParseResult.Ok)
+    }
+
+    @Test
+    fun `qr with the current version is accepted`() {
+        val result = QrPayloadParser.parse(
+            """{"v":1,"app":"LiveTypeBridge","host":"192.168.1.5","port":53017,"sid":"abc","pin":"123456","exp":9999999999999}""",
+            nowMs = 1_000_000L,
+        )
+        assertTrue(result is QrParseResult.Ok)
+    }
+
+    @Test
+    fun `qr from a newer protocol is rejected with a clear error`() {
+        val result = QrPayloadParser.parse(
+            """{"v":2,"app":"LiveTypeBridge","host":"192.168.1.5","port":53017,"sid":"abc","pin":"123456","exp":9999999999999}""",
+            nowMs = 1_000_000L,
+        )
+        assertEquals(QrError.UNSUPPORTED_VERSION, (result as QrParseResult.Invalid).reason)
+    }
+
+    @Test
     fun `decode ignores unknown fields like the Windows side does`() {
         val incoming = """
             {"type":"ack","revision":5,"applied":true,"reason":"duplicate",
