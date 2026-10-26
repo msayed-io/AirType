@@ -60,13 +60,11 @@ class CapsuleMotionTest {
 
     @Test
     fun `a second close request while closing is ignored`() {
+        // Only another *close* is dropped here: a tap on the bubble during the exit is a
+        // deliberate re-open and is covered by the reversal test below.
         assertEquals(
             CapsuleCommand.NONE,
             CapsuleMotion.command(CapsulePhase.HIDING, CapsuleRequest.HIDE),
-        )
-        assertEquals(
-            CapsuleCommand.NONE,
-            CapsuleMotion.command(CapsulePhase.HIDING, CapsuleRequest.TOGGLE),
         )
         assertEquals(
             CapsuleCommand.NONE,
