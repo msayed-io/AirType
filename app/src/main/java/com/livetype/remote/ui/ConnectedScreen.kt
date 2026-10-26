@@ -1,6 +1,17 @@
 package com.livetype.remote.ui
 
+import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -31,20 +42,26 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,11 +75,19 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.livetype.remote.core.network.ConnState
+import com.livetype.remote.core.session.AirTypeSession
+import com.livetype.remote.service.AirTypeSessionService
+import com.livetype.remote.ui.overlay.OverlayPermission
 import com.livetype.remote.ui.components.DarkGraphiteIconButton
 import com.livetype.remote.ui.components.LiquidErrorBanner
 import com.livetype.remote.ui.components.LiquidGlassIconButton
@@ -75,12 +100,92 @@ import com.livetype.remote.ui.components.LiveTypeSecondaryButton
 import com.livetype.remote.ui.components.MetricStatTile
 import com.livetype.remote.ui.components.TactileCard
 import com.livetype.remote.ui.theme.LiveTypeTokens
+import kotlin.math.roundToInt
+
+/** Professional bubble colours drawn from the existing AirType palette. */
+private val BUBBLE_COLORS = listOf(
+    0xFF5F7ABF.toInt(), // periwinkle deep (default)
+    0xFF1C1E22.toInt(), // graphite
+    0xFF7C93D6.toInt(), // periwinkle light
+    0xFF10B981.toInt(), // success green
+    0xFFF59E0B.toInt(), // amber
+)
+
+/** A session the user started and did not cut yet (it may be reconnecting). */
+private val ConnState.isLive: Boolean
+    get() = this == ConnState.PAIRED || this == ConnState.CONNECTING || this == ConnState.RECONNECTING
+
+/** Unwraps the Compose context down to the hosting Activity (for moveTaskToBack). */
+private fun Context.findActivity(): Activity? {
+    var ctx = this
+    while (ctx is ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
+}
 
 @Composable
 fun ConnectedScreen(vm: AppViewModel) {
     val ui by vm.ui.collectAsState()
     val view = LocalView.current
     var isLaptopCardVisible by remember { mutableStateOf(false) }
+
+    // ---- floating mode (bubble + capsule) -----------------------------------
+    val context = LocalContext.current
+    val activity = context.findActivity()
+    var showOverlayPermissionDialog by remember { mutableStateOf(false) }
+    var awaitingOverlayPermission by remember { mutableStateOf(false) }
+    var floatingMessage by remember { mutableStateOf<String?>(null) }
+
+    fun enterFloatingMode() {
+        // Read the process-wide snapshot, not a captured composition value, so the
+        // on-resume re-check after the system permission screen sees live state.
+        if (!AirTypeSession.snapshot.value.hasLiveSession) {
+            floatingMessage = s("floating_needs_session")
+            return
+        }
+        if (!OverlayPermission.canDraw(context)) {
+            showOverlayPermissionDialog = true
+            return
+        }
+        AirTypeSessionService.showOverlay(context)
+        floatingMessage = null
+        // Put AirType itself in the background, exactly like pressing Home. The session
+        // lives in the foreground service, so this never touches the connection.
+        activity?.moveTaskToBack(true)
+    }
+
+    // Android 13+ needs a runtime permission before the session notice can be shown.
+    val notifPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Re-check the overlay permission when the user comes back from system settings.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && awaitingOverlayPermission) {
+                awaitingOverlayPermission = false
+                if (OverlayPermission.canDraw(context)) {
+                    enterFloatingMode()
+                } else {
+                    floatingMessage = "floating_permission_needed"
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // Keep screen awake during live typing
     DisposableEffect(Unit) {
@@ -231,6 +336,8 @@ fun ConnectedScreen(vm: AppViewModel) {
 
                 LiquidErrorBanner(ui.lastError)
                 if (!ui.lastError.isNullOrBlank()) Spacer(Modifier.height(10.dp))
+                LiquidErrorBanner(floatingMessage)
+                if (!floatingMessage.isNullOrBlank()) Spacer(Modifier.height(10.dp))
 
                 // Main Dictation & Live Typing Pad Card
                 TactileCard(
@@ -388,15 +495,45 @@ fun ConnectedScreen(vm: AppViewModel) {
                     modifier = Modifier.clickable { isLaptopCardVisible = !isLaptopCardVisible }
                 )
 
-                // Settings Capsule on the opposite edge
-                DarkGraphiteIconButton(
-                    icon = Icons.Default.Settings,
-                    contentDescription = s("settings_title"),
-                    onClick = { vm.goSettings() },
-                    size = 46.dp,
-                )
+                // Floating mode + Settings capsules on the opposite edge
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    DarkGraphiteIconButton(
+                        icon = Icons.Default.PictureInPictureAlt,
+                        contentDescription = s("floating_mode"),
+                        onClick = { enterFloatingMode() },
+                        size = 46.dp,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    DarkGraphiteIconButton(
+                        icon = Icons.Default.Settings,
+                        contentDescription = s("settings_title"),
+                        onClick = { vm.goSettings() },
+                        size = 46.dp,
+                    )
+                }
             }
         }
+    }
+    if (showOverlayPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showOverlayPermissionDialog = false },
+            title = { Text(s("floating_permission_title")) },
+            text = { Text(s("floating_permission_text")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showOverlayPermissionDialog = false
+                    awaitingOverlayPermission = true
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:${context.packageName}"),
+                    )
+                    runCatching { context.startActivity(intent) }
+                }) { Text(s("open_settings")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOverlayPermissionDialog = false }) { Text(s("cancel")) }
+            },
+        )
     }
 }
 
@@ -491,7 +628,91 @@ fun SettingsScreen(vm: AppViewModel) {
                             onChange = { vm.setAutoConnect(it) },
                         )
 
+                        Spacer(Modifier.height(18.dp))
+
+                        // ---- floating bubble appearance -----------------------
+                        Text(
+                            text = s("floating_bubble_size"),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = LiveTypeTokens.TextSecondary,
+                                fontSize = 12.sp,
+                            ),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Slider(
+                                value = ui.bubbleSizeDp.toFloat(),
+                                onValueChange = { vm.setBubbleSize(it.roundToInt()) },
+                                valueRange = 44f..66f,
+                                steps = 10,
+                                modifier = Modifier.weight(1f),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = LiveTypeTokens.AccentPeriwinkleDeep,
+                                    activeTrackColor = LiveTypeTokens.AccentPeriwinkle,
+                                    inactiveTrackColor = LiveTypeTokens.BorderSubtle,
+                                ),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            // Live preview of the bubble at the chosen size and colour.
+                            Box(
+                                modifier = Modifier
+                                    .size(ui.bubbleSizeDp.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(ui.bubbleColor)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PictureInPictureAlt,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size((ui.bubbleSizeDp * 0.42f).dp),
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+
+                        Text(
+                            text = s("floating_bubble_color"),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = LiveTypeTokens.TextSecondary,
+                                fontSize = 12.sp,
+                            ),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            BUBBLE_COLORS.forEach { color ->
+                                val selected = ui.bubbleColor == color
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(color))
+                                        .border(
+                                            width = if (selected) 3.dp else 1.dp,
+                                            color = if (selected) LiveTypeTokens.TextPrimary else LiveTypeTokens.BorderSubtle,
+                                            shape = CircleShape,
+                                        )
+                                        .clickable { vm.setBubbleColor(color) },
+                                )
+                            }
+                        }
+
                         Spacer(Modifier.height(16.dp))
+
+                        LiveTypeSecondaryButton(
+                            text = s("floating_stop"),
+                            onClick = { vm.stopFloatingMode() },
+                            height = 44.dp,
+                        )
+
+                        Spacer(Modifier.height(10.dp))
 
                         LiveTypeSecondaryButton(
                             text = s("forget_pairing"),

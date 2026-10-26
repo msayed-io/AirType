@@ -5,22 +5,20 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.livetype.remote.core.discovery.DiscoveredDevice
 import com.livetype.remote.core.discovery.NetworkDiscoveryManager
-import com.livetype.remote.core.network.BridgeConnection
 import com.livetype.remote.core.network.ConnState
 import com.livetype.remote.core.pairing.PairingInfo
 import com.livetype.remote.core.pairing.PairingStore
 import com.livetype.remote.core.pairing.QrParseResult
 import com.livetype.remote.core.pairing.QrPayloadParser
-import com.livetype.remote.core.pairing.SavedPairing
-import com.livetype.remote.core.protocol.Envelope
+import com.livetype.remote.core.session.AirTypeSession
+import com.livetype.remote.core.session.SessionEvent
 import com.livetype.remote.core.session.StreamSession
 import com.livetype.remote.core.voice.VoiceRecognitionManager
+import com.livetype.remote.service.AirTypeSessionService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import okhttp3.OkHttpClient
-import java.util.concurrent.TimeUnit
 
 enum class Screen { WELCOME, SCANNER, CONNECTED, SETTINGS }
 
@@ -63,6 +61,10 @@ data class AppUiState(
     val discoveredDevices: List<DiscoveredDevice> = emptyList(),
     val isScanningDevices: Boolean = false,
     val selectedDeviceForPin: DiscoveredDevice? = null,
+
+    // Floating mode (bubble + writing capsule)
+    val bubbleSizeDp: Int = 54,
+    val bubbleColor: Int = 0xFF5F7ABF.toInt(),
 )
 
 /**
@@ -70,23 +72,17 @@ data class AppUiState(
  */
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
+    private val appContext: Application = app
     private val store = PairingStore(app)
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS) // WebSocket: stay open
-        .pingInterval(0, TimeUnit.SECONDS)    // our own heartbeat instead
-        .build()
-
-    private val deviceName = "Android · ${android.os.Build.MODEL.take(24)}"
-
-    private val session = StreamSession(deviceName = deviceName)
     private val discoveryManager = NetworkDiscoveryManager(app, viewModelScope)
-    private var connection: BridgeConnection? = null
-    private var currentInfo: PairingInfo? = null
-    private var currentPcName: String = ""
+
+    /**
+     * The socket and the stream belong to [AirTypeSession] (process scope), not to this
+     * view model: that is what lets the connection outlive the screen.
+     */
+    private val session: StreamSession get() = AirTypeSession.stream
     private var vibratedThisConnection = false
     private var hasAutoConnectedThisSession = false
-    private var resyncOnNextSessionReady = false
 
     private var committedVoiceText: String = ""
     private var voiceManager: VoiceRecognitionManager? = null
@@ -100,14 +96,76 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             trustedDeviceName = store.load()?.deviceName?.ifBlank { store.load()?.host },
             language = store.language,
             vibrateOnPair = store.vibrateOnPair,
+            bubbleSizeDp = store.bubbleSizeDp,
+            bubbleColor = store.bubbleColor,
         )
     )
     val ui: StateFlow<AppUiState> = _ui
 
     init {
+        AirTypeSession.init(app)
+        observeSessionState()
         initVoiceManager(app)
         initDiscovery()
         tryDirectAutoConnect()
+    }
+
+    /**
+     * Mirrors the process-owned session into screen state. This never opens a socket, so
+     * re-creating the activity (rotation, returning from another app) cannot double-send
+     * or double-connect.
+     */
+    private fun observeSessionState() {
+        viewModelScope.launch {
+            AirTypeSession.snapshot.collect { snap ->
+                val saved = store.load()
+                _ui.update {
+                    it.copy(
+                        conn = snap.conn,
+                        reconnectAttempt = snap.reconnectAttempt,
+                        latencyMs = snap.latencyMs,
+                        text = snap.text,
+                        opsSent = snap.opsSent,
+                        revision = snap.revision,
+                        streamingEnabled = snap.streamingEnabled,
+                        lastError = snap.lastError,
+                        lastErrorCode = snap.lastErrorCode,
+                        laptopAddress = if (snap.host.isBlank()) "" else "${snap.host}:${snap.port}",
+                        laptopHost = snap.host,
+                        sessionExpiresAtMs = snap.sessionExpiresAtMs,
+                        savedPairingAvailable = saved != null,
+                        trustedHost = saved?.host,
+                        trustedDeviceName = saved?.deviceName?.ifBlank { saved.host },
+                    )
+                }
+                if (!snap.hasLiveSession && snap.conn == ConnState.DISCONNECTED &&
+                    _ui.value.screen == Screen.CONNECTED
+                ) {
+                    _ui.update { it.copy(screen = Screen.WELCOME) }
+                }
+            }
+        }
+        viewModelScope.launch {
+            AirTypeSession.events.collect { event ->
+                when (event) {
+                    SessionEvent.PAIRED -> {
+                        if (!vibratedThisConnection) {
+                            vibratedThisConnection = true
+                            if (_ui.value.vibrateOnPair) pairSucceeded.value = true
+                        }
+                        _ui.update { it.copy(pairingJustSucceeded = store.load() != null) }
+                    }
+                    SessionEvent.SESSION_LOST -> {
+                        // The desktop restarted with a fresh runtime sessionId: rediscover
+                        // and reconnect from the live beacon (saved token still valid).
+                        hasAutoConnectedThisSession = false
+                        discoveryManager.startDiscovery()
+                        _ui.update { it.copy(isAutoConnecting = true) }
+                    }
+                    SessionEvent.BAD_TOKEN -> _ui.update { it.copy(savedPairingAvailable = false) }
+                }
+            }
+        }
     }
 
     private fun initDiscovery() {
@@ -182,17 +240,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             context = app,
             onPartialText = { partial ->
                 _ui.update { it.copy(partialSpeechText = partial) }
-                val combined = buildStreamText(committedVoiceText, partial)
-                val env = session.onTextChanged(combined)
-                _ui.update { it.copy(text = session.localText, opsSent = session.opsSent, revision = session.revision) }
-                env?.let { connection?.send(it) }
+                AirTypeSession.onTextChanged(buildStreamText(committedVoiceText, partial))
             },
             onFinalText = { finalChunk ->
                 committedVoiceText = buildStreamText(committedVoiceText, finalChunk)
                 _ui.update { it.copy(partialSpeechText = "") }
-                val env = session.onTextChanged(committedVoiceText)
-                _ui.update { it.copy(text = session.localText, opsSent = session.opsSent, revision = session.revision) }
-                env?.let { connection?.send(it) }
+                AirTypeSession.onTextChanged(committedVoiceText)
             },
             onErrorOccurred = { errorKey ->
                 _ui.update { it.copy(lastError = errorKey) }
@@ -238,7 +291,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun goSettings() = setScreen(Screen.SETTINGS)
     fun backFromSettings() =
-        setScreen(if (connection?.state?.value?.state == ConnState.PAIRED) Screen.CONNECTED else Screen.WELCOME)
+        setScreen(if (AirTypeSession.snapshot.value.conn == ConnState.PAIRED) Screen.CONNECTED else Screen.WELCOME)
 
     private fun setScreen(screen: Screen) = _ui.update { it.copy(screen = screen, lastError = null, isAutoConnecting = false) }
 
@@ -281,7 +334,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val device = _ui.value.selectedDeviceForPin ?: return
         _ui.update { it.copy(selectedDeviceForPin = null) }
         val sid = device.sessionId ?: "session_${System.currentTimeMillis()}"
-        currentPcName = device.name
         val wsUrl = "ws://${device.host}:${device.port}/livetype"
         beginPairing(
             PairingInfo(wsUrl, device.host, device.port, sid, pin, 0L),
@@ -317,18 +369,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun beginPairing(info: PairingInfo, token: String? = null, pcName: String? = null) {
         discoveryManager.stopDiscovery()
-        connection?.closeByUser(Envelope.Reasons.REPLACED)
-        session.setStreamEnabled(true)
         vibratedThisConnection = false
-        currentInfo = info
-        if (!pcName.isNullOrBlank()) currentPcName = pcName
-        // A newly discovered trusted desktop session has a fresh server-side mirror.
-        // A transient WebSocket reconnect within the same session does not.
-        resyncOnNextSessionReady = !token.isNullOrBlank() && session.localText.isNotEmpty()
-
-        val conn = BridgeConnection(client, viewModelScope, deviceName = deviceName, clientId = store.clientId)
-        connection = conn
-        observeConnection(conn)
+        AirTypeSession.rememberPairing = store.rememberPairing
+        AirTypeSession.connect(info, token, pcName)
+        // The session service starts here, from a visible user action (pairing/connect),
+        // which is the supported moment to start a foreground service. From now on the
+        // connection no longer depends on this screen being alive.
+        AirTypeSessionService.start(appContext)
 
         _ui.update {
             it.copy(
@@ -348,157 +395,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 isAutoConnecting = false,
             )
         }
-        conn.start(info.wsUrl, info.sessionId, info.pin, info.expiresAtMs, token = token)
-    }
-
-    private fun observeConnection(conn: BridgeConnection) {
-        viewModelScope.launch {
-            conn.state.collect { snap ->
-                _ui.update {
-                    it.copy(
-                        conn = snap.state,
-                        reconnectAttempt = snap.reconnectAttempt,
-                        latencyMs = snap.lastRttMs,
-                        lastErrorCode = snap.lastErrorCode ?: it.lastErrorCode,
-                        lastError = snap.lastErrorDetail ?: it.lastError,
-                    )
-                }
-            }
-        }
-        viewModelScope.launch {
-            conn.messages.collect { env -> onServerMessage(env, conn) }
-        }
-        viewModelScope.launch {
-            conn.reconnected.collect {
-                // Desktop retains the logical stream pump for this runtime session.
-                // Replaying only unacknowledged revision IDs is therefore idempotent:
-                // applied edits are rejected as duplicates; lost edits apply once.
-                conn.sendAll(session.unacknowledgedEdits())
-                _ui.update { it.copy(text = session.localText, opsSent = session.opsSent, revision = session.revision) }
-            }
-        }
-    }
-
-    private fun onServerMessage(env: Envelope, conn: BridgeConnection) {
-        when (env.type) {
-            Envelope.Types.SESSION_READY -> {
-                if (!vibratedThisConnection) {
-                    vibratedThisConnection = true
-                    if (_ui.value.vibrateOnPair) pairSucceeded.value = true
-                }
-                val info = currentInfo
-                if (info != null) {
-                    val tok = env.token.orEmpty()
-                    if (store.rememberPairing && tok.isNotBlank()) {
-                        val saved = SavedPairing(
-                            wsUrl = info.wsUrl,
-                            host = info.host,
-                            port = info.port,
-                            sessionId = info.sessionId,
-                            // The persistent token replaces first-time PIN authentication.
-                            // Never retain the one-time PIN after trust succeeds.
-                            pin = "",
-                            token = tok,
-                            expiresAtMs = 0L,
-                            deviceName = currentPcName.ifBlank { info.host },
-                        )
-                        store.save(saved)
-                        _ui.update {
-                            it.copy(
-                                savedPairingAvailable = true,
-                                pairingJustSucceeded = true,
-                                trustedHost = saved.host,
-                                trustedDeviceName = saved.deviceName
-                            )
-                        }
-                    }
-
-                    if (resyncOnNextSessionReady) {
-                        resyncOnNextSessionReady = false
-                        conn.sendAll(session.resyncAfterReconnect())
-                        _ui.update {
-                            it.copy(
-                                text = session.localText,
-                                opsSent = session.opsSent,
-                                revision = session.revision,
-                            )
-                        }
-                    }
-                }
-            }
-
-            Envelope.Types.ACK -> {
-                session.onAck(env)
-                // The reset ack reports the text the PC actually holds; only now can we
-                // rewrite it without leaving the un-acked tail in place (duplicate text).
-                session.onResetAck(env)?.let { rewrite -> conn.sendAll(listOf(rewrite)) }
-                _ui.update {
-                    it.copy(
-                        opsSent = session.opsSent,
-                        revision = session.revision,
-                        text = session.localText,
-                    )
-                }
-            }
-
-            Envelope.Types.RESET_STREAM -> {
-                // Server lost sync: answer with reset_stream + full rewrite.
-                conn.sendAll(session.onServerResetRequest(env))
-                _ui.update { it.copy(opsSent = session.opsSent, revision = session.revision) }
-            }
-
-            Envelope.Types.DISCONNECT -> {
-                _ui.update { it.copy(lastError = "server_closing") }
-            }
-
-            Envelope.Types.ERROR -> {
-                if (env.errorCode == Envelope.Errors.BAD_TOKEN) {
-                    // Token expired or revoked on PC: reset token to allow fresh PIN pairing
-                    store.clear()
-                    _ui.update {
-                        it.copy(
-                            lastError = env.errorMessage ?: "Token expired",
-                            lastErrorCode = env.errorCode,
-                            savedPairingAvailable = false,
-                        )
-                    }
-                } else if (env.errorCode == Envelope.Errors.UNKNOWN_SESSION
-                    || env.errorCode == Envelope.Errors.SESSION_EXPIRED
-                ) {
-                    // Desktop restarted and issued a fresh runtime sessionId. Keep the
-                    // persistent token, resume discovery, and reconnect from its beacon.
-                    hasAutoConnectedThisSession = false
-                    discoveryManager.startDiscovery()
-                    _ui.update {
-                        it.copy(
-                            lastError = null,
-                            lastErrorCode = null,
-                            isAutoConnecting = true,
-                        )
-                    }
-                } else {
-                    _ui.update { it.copy(lastError = env.errorCode, lastErrorCode = env.errorCode) }
-                }
-            }
-        }
     }
 
     // ---- live text & voice ---------------------------------------------------
 
-    /** Called from the TextField on every change (dictation included). */
+    /**
+     * Called from the phone's text field on every change (dictation included) and, through
+     * the capsule's own watcher, from the floating window. Both paths end up in the same
+     * stream, so an edit is streamed once no matter where it was typed.
+     */
     fun onTextChanged(newText: String) {
         committedVoiceText = newText
-        val env = session.onTextChanged(newText)
-        _ui.update { it.copy(text = session.localText, opsSent = session.opsSent, revision = session.revision) }
-        env?.let { connection?.send(it) }
+        AirTypeSession.onTextChanged(newText)
     }
 
     fun clearText() {
         committedVoiceText = ""
         _ui.update { it.copy(partialSpeechText = "") }
-        val env = session.clearText()
-        _ui.update { it.copy(text = session.localText, opsSent = session.opsSent, revision = session.revision) }
-        env?.let { connection?.send(it) }
+        AirTypeSession.clearText()
     }
 
     // Voice Studio controls
@@ -562,19 +476,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         onTextChanged(committedVoiceText)
     }
 
-    fun toggleStream() {
-        val enable = !session.isStreamEnabled()
-        session.setStreamEnabled(enable)
-        if (enable) connection?.sendAll(session.resyncAfterPause())
-        _ui.update { it.copy(streamingEnabled = enable, opsSent = session.opsSent, revision = session.revision) }
-    }
+    fun toggleStream() = AirTypeSession.toggleStream()
 
     fun disconnect() {
         hasAutoConnectedThisSession = true // Don't auto-reconnect immediately after explicit disconnect
         voiceManager?.stop()
-        connection?.closeByUser()
-        connection = null
-        session.setStreamEnabled(true)
+        AirTypeSession.disconnect()
         discoveryManager.startDiscovery()
         _ui.update {
             it.copy(
@@ -618,6 +525,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setRememberPairing(on: Boolean) {
         store.rememberPairing = on
+        AirTypeSession.rememberPairing = on
         if (!on) store.clear()
         _ui.update { it.copy(savedPairingAvailable = if (on) it.savedPairingAvailable else false) }
     }
@@ -627,15 +535,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(autoConnectEnabled = on) }
     }
 
+    /** Bubble diameter in dp; applied to a live bubble without touching the session. */
+    fun setBubbleSize(sizeDp: Int) {
+        store.bubbleSizeDp = sizeDp
+        _ui.update { it.copy(bubbleSizeDp = store.bubbleSizeDp) }
+        AirTypeSessionService.refreshOverlay(appContext)
+    }
+
+    /** Solid bubble colour; stored locally and applied live. */
+    fun setBubbleColor(color: Int) {
+        store.bubbleColor = color
+        _ui.update { it.copy(bubbleColor = color) }
+        AirTypeSessionService.refreshOverlay(appContext)
+    }
+
+    fun stopFloatingMode() {
+        AirTypeSessionService.hideOverlay(appContext)
+    }
+
     fun consumePairSucceeded() {
         pairSucceeded.value = false
         _ui.update { it.copy(pairingJustSucceeded = false) }
     }
 
     override fun onCleared() {
+        // The connection is deliberately NOT closed here: it belongs to AirTypeSession and
+        // the foreground service, so leaving or rotating the screen keeps it alive.
         discoveryManager.stopDiscovery()
         voiceManager?.destroy()
-        connection?.closeByUser(Envelope.Reasons.PHONE_CLOSED)
         super.onCleared()
     }
 }
