@@ -137,12 +137,15 @@ fun ConnectedScreen(vm: AppViewModel) {
     var showOverlayPermissionDialog by remember { mutableStateOf(false) }
     var awaitingOverlayPermission by remember { mutableStateOf(false) }
     var floatingMessage by remember { mutableStateOf<String?>(null) }
+    // Read the localization map here (composable context) so the helpers below stay plain
+    // functions that the lifecycle observer can also call.
+    val strings = LocalStrings.current
 
     fun enterFloatingMode() {
         // Read the process-wide snapshot, not a captured composition value, so the
         // on-resume re-check after the system permission screen sees live state.
         if (!AirTypeSession.snapshot.value.hasLiveSession) {
-            floatingMessage = s("floating_needs_session")
+            floatingMessage = strings["floating_needs_session"]
             return
         }
         if (!OverlayPermission.canDraw(context)) {
@@ -179,7 +182,7 @@ fun ConnectedScreen(vm: AppViewModel) {
                 if (OverlayPermission.canDraw(context)) {
                     enterFloatingMode()
                 } else {
-                    floatingMessage = "floating_permission_needed"
+                    floatingMessage = strings["floating_permission_needed"]
                 }
             }
         }
