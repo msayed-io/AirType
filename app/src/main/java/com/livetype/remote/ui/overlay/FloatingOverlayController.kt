@@ -1,5 +1,7 @@
 package com.livetype.remote.ui.overlay
 
+import android.animation.Animator
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
@@ -20,6 +22,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.view.animation.LinearInterpolator
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -32,7 +35,6 @@ import com.livetype.remote.core.session.SessionSnapshot
 import com.livetype.remote.core.network.ConnState
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** True when Android lets this app draw over other apps (checked at use time, every time). */
@@ -64,6 +66,10 @@ class FloatingOverlayController(rawContext: Context) {
     private val capsule: LinearLayout by lazy { buildCapsule() }
     private val input: EditText by lazy { capsule.findViewById<EditText>(R.id.airtype_capsule_input) }
     private val statusDot: View by lazy { capsule.findViewById(R.id.airtype_capsule_dot) }
+    private val actionButton: FrameLayout by lazy { capsule.findViewById(R.id.airtype_capsule_action) }
+    private val closeIcon: ImageView by lazy { capsule.findViewById(R.id.airtype_capsule_close) }
+    private val clearIcon: ImageView by lazy { capsule.findViewById(R.id.airtype_capsule_clear) }
+    private val strings by lazy { com.livetype.remote.ui.Strings.forLang(store.language) }
 
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var capsuleParams: WindowManager.LayoutParams? = null
@@ -71,6 +77,9 @@ class FloatingOverlayController(rawContext: Context) {
     private var capsuleAttached = false
     private var suppressWatcher = false
     private var lastSnapshot: SessionSnapshot = SessionSnapshot()
+    private var capsuleAnimator: ValueAnimator? = null
+    private var capsuleProgress = 0f
+    private var capsuleClosing = false
 
     private fun dp(value: Int): Int =
         (value * context.resources.displayMetrics.density).roundToInt()
@@ -135,17 +144,26 @@ class FloatingOverlayController(rawContext: Context) {
     }
 
     fun hideBubble() {
-        hideCapsule()
+        // Leaving floating mode removes both windows at once: no fade-out window may
+        // outlive the bubble it belongs to.
+        capsuleAnimator?.cancel()
+        capsuleAnimator = null
+        removeCapsuleWindow.run()
         if (!bubbleAttached) return
         runCatching { windowManager.removeView(bubble) }
         bubbleAttached = false
         bubbleParams = null
     }
 
-    /** Tap on the bubble: show the capsule (and the keyboard), or hide it again. */
+    /**
+     * Tap on the bubble: show the capsule (and the keyboard), or hide it again.
+     *
+     * While a close transition is still running the capsule counts as hidden, so a second
+     * tap re-opens it and the running motion is reversed instead of stacking a new one.
+     */
     @SuppressLint("ClickableViewAccessibility")
     fun toggleCapsule() {
-        if (capsuleAttached) hideCapsule() else showCapsule()
+        if (capsuleAttached && !capsuleClosing) hideCapsule() else showCapsule()
     }
 
     fun showCapsule() {
@@ -175,7 +193,11 @@ class FloatingOverlayController(rawContext: Context) {
             }
             capsuleParams = params
             runCatching { windowManager.addView(capsule, params) }
-                .onSuccess { capsuleAttached = true }
+                .onSuccess {
+                    capsuleAttached = true
+                    // Start from nothing so the first frame cannot flash at full opacity.
+                    applyCapsuleProgress(0f)
+                }
                 .onFailure { capsuleAttached = false; return }
 
             // Keep the capsule above the keyboard zone: the keyboard takes roughly the
@@ -192,8 +214,11 @@ class FloatingOverlayController(rawContext: Context) {
 
         syncFromSession()
         bubble.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(EXIT_MS).start()
-        capsule.alpha = 0f
-        capsule.animate().alpha(1f).setDuration(ENTER_MS).start()
+        // The capsule grows out of the edge of the bubble it belongs to, so the pair reads
+        // as one floating object rather than as a second, unrelated window.
+        anchorCapsule(pivotBubble = bubbleP, capsuleWidthPx = width)
+        capsuleClosing = false
+        animateCapsuleTo(1f)
         input.post {
             // Requesting focus before the window is laid out is silently dropped, which
             // would leave the capsule visible but untypeable.
@@ -205,13 +230,172 @@ class FloatingOverlayController(rawContext: Context) {
     fun hideCapsule() {
         if (!capsuleAttached) return
         ime?.hideSoftInputFromWindow(input.windowToken, 0)
-        capsule.animate().alpha(0f).setDuration(EXIT_MS).withEndAction {
-            if (capsuleAttached) {
-                runCatching { windowManager.removeView(capsule) }
-                capsuleAttached = false
-                capsuleParams = null
+        capsuleClosing = true
+        // The window is removed only once the motion has actually finished, so it never
+        // vanishes mid-flight and never leaves an invisible layer behind.
+        animateCapsuleTo(0f) { removeCapsuleWindow.run() }
+    }
+
+    /** Removes the capsule window. Idempotent: safe from the motion end and from destroy(). */
+    private val removeCapsuleWindow = Runnable {
+        capsuleAnimator?.cancel()
+        capsuleAnimator = null
+        capsuleProgress = 0f
+        if (capsuleAttached) {
+            runCatching { windowManager.removeView(capsule) }
+            capsuleAttached = false
+        }
+        capsuleParams = null
+        capsuleClosing = false
+    }
+
+    // ---- capsule motion and the smart trailing button ---------------------------
+
+    /**
+     * Puts the scale pivot on the corner of the capsule that faces the bubble, so the
+     * capsule appears to unfold from the bubble instead of from nowhere.
+     */
+    private fun anchorCapsule(pivotBubble: WindowManager.LayoutParams, capsuleWidthPx: Int) {
+        val capsuleX = capsuleParams?.x ?: dp(MARGIN_DP)
+        val capsuleY = capsuleParams?.y ?: pivotBubble.y
+        val bubbleCentreX = pivotBubble.x + pivotBubble.width / 2f
+        val bubbleCentreY = pivotBubble.y + pivotBubble.height / 2f
+        val capsuleCentreX = capsuleX + capsuleWidthPx / 2f
+        val capsuleCentreY = capsuleY + dp(CAPSULE_MAX_HEIGHT_DP) / 2f
+        capsule.pivotX = if (bubbleCentreX >= capsuleCentreX) capsuleWidthPx.toFloat() else 0f
+        capsule.pivotY =
+            if (bubbleCentreY >= capsuleCentreY) dp(CAPSULE_MAX_HEIGHT_DP).toFloat() else 0f
+    }
+
+    /**
+     * Grows or shrinks the capsule along a critically damped spring curve.
+     *
+     * Reversals reuse the current progress, so tapping the bubble twice quickly produces
+     * one continuous motion instead of two overlapping ones.
+     */
+    private fun animateCapsuleTo(target: Float, onFinished: (() -> Unit)? = null) {
+        capsuleAnimator?.cancel()
+        val from = capsuleProgress
+        if (abs(target - from) < 0.001f && onFinished == null) {
+            applyCapsuleProgress(target)
+            return
+        }
+        if (!animationsEnabled()) {
+            applyCapsuleProgress(target)
+            onFinished?.invoke()
+            return
+        }
+        val opening = target > from
+        val response = CapsuleMotion.responseMillis(opening)
+        val duration = (response * abs(target - from)).toInt()
+            .coerceAtLeast(CapsuleMotion.MIN_STEP_MS)
+        var cancelled = false
+        val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            this.duration = duration.toLong()
+            interpolator = LinearInterpolator()
+            addUpdateListener { anim ->
+                val linear = anim.animatedValue as Float
+                val elapsed = (linear * response).toInt()
+                val eased = CapsuleMotion.springFraction(response, elapsed)
+                applyCapsuleProgress(from + (target - from) * eased)
             }
-        }.start()
+            addListener(object : Animator.AnimatorListener {
+                override fun onAnimationStart(animation: Animator) = Unit
+                override fun onAnimationCancel(animation: Animator) {
+                    cancelled = true
+                }
+
+                override fun onAnimationEnd(animation: Animator) {
+                    if (cancelled) return
+                    capsuleAnimator = null
+                    applyCapsuleProgress(target)
+                    onFinished?.invoke()
+                }
+
+                override fun onAnimationRepeat(animation: Animator) = Unit
+            })
+        }
+        capsuleAnimator = animator
+        animator.start()
+    }
+
+    private fun applyCapsuleProgress(progress: Float) {
+        capsuleProgress = progress.coerceIn(0f, 1f)
+        capsule.alpha = CapsuleMotion.alphaFor(capsuleProgress)
+        val scale = CapsuleMotion.scaleFor(capsuleProgress)
+        capsule.scaleX = scale
+        capsule.scaleY = scale
+        capsule.translationY = dp(CapsuleMotion.TRAVEL_DP) * (1f - capsuleProgress)
+    }
+
+    /**
+     * Honours the system animation scale: with animations turned off (accessibility
+     * "remove animations" / developer setting) the transitions become instantaneous while
+     * every interaction still works.
+     */
+    private fun animationsEnabled(): Boolean = runCatching {
+        Settings.Global.getFloat(
+            context.contentResolver,
+            Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        ) > 0f
+    }.getOrDefault(true)
+
+    /**
+     * The single trailing button: it closes the capsule while the field is empty and
+     * clears the field while there is text. Both glyphs live in the same fixed 36dp slot,
+     * so swapping them never moves the button, the field or the capsule edge.
+     */
+    private fun updateCapsuleAction(animate: Boolean = true) {
+        val clearing = CapsuleMotion.actionFor(input.text) == CapsuleAction.CLEAR
+        val closeAlpha = if (clearing) 0f else 1f
+        val clearAlpha = if (clearing) 1f else 0f
+        actionButton.contentDescription = strings[
+            if (clearing) "floating_capsule_clear" else "floating_capsule_close"
+        ]
+        if (!animate) {
+            closeIcon.animate().cancel()
+            clearIcon.animate().cancel()
+            closeIcon.alpha = closeAlpha
+            clearIcon.alpha = clearAlpha
+            return
+        }
+        if (closeIcon.alpha == closeAlpha && clearIcon.alpha == clearAlpha) return
+        val ms = CapsuleMotion.ICON_SWAP_MS.toLong()
+        closeIcon.animate().alpha(closeAlpha).setDuration(ms).start()
+        clearIcon.animate().alpha(clearAlpha).setDuration(ms).start()
+    }
+
+    private fun onCapsuleAction() {
+        when (CapsuleMotion.actionFor(input.text)) {
+            CapsuleAction.CLOSE -> hideCapsule()
+            CapsuleAction.CLEAR -> clearCapsuleTextLocally()
+        }
+    }
+
+    /**
+     * Empties the capsule field locally and sends NOTHING to the desktop.
+     *
+     * [AirTypeSession.clearText] → `StreamSession.clearText()` returns no envelope, resets
+     * its own baseline and marks the stream append-only, so the next characters are typed
+     * *after* the text the desktop already holds. The field is emptied with the change
+     * watcher suspended, which is what keeps the local clear from being turned into an
+     * indirect delete of everything already typed on the PC.
+     */
+    private fun clearCapsuleTextLocally() {
+        suppressWatcher = true
+        try {
+            AirTypeSession.clearText()
+            input.setText("")
+            input.setSelection(0)
+        } finally {
+            suppressWatcher = false
+        }
+        updateCapsuleAction()
+        input.post {
+            input.requestFocus()
+            ime?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     /** Mirrors session state into the capsule (dot colour, remote text) without echoing. */
@@ -249,7 +433,9 @@ class FloatingOverlayController(rawContext: Context) {
     }
 
     fun destroy() {
-        hideCapsule()
+        capsuleAnimator?.cancel()
+        capsuleAnimator = null
+        removeCapsuleWindow.run()
         hideBubble()
     }
 
@@ -325,6 +511,7 @@ class FloatingOverlayController(rawContext: Context) {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
             override fun afterTextChanged(s: Editable?) {
+                updateCapsuleAction()
                 if (suppressWatcher) return
                 // Same single entry point as the phone screen: one diff, one message.
                 AirTypeSession.onTextChanged(s?.toString().orEmpty())
@@ -332,14 +519,35 @@ class FloatingOverlayController(rawContext: Context) {
         })
         root.addView(field, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
-        val close = ImageView(context).apply {
+        // One 36dp slot, two glyphs stacked and cross-faded. The slot size never changes,
+        // so switching between close and clear cannot shift the field or the capsule.
+        val closeView = ImageView(context).apply {
+            id = R.id.airtype_capsule_close
             setImageResource(R.drawable.ic_floating_close)
-            contentDescription = "close"
+            contentDescription = null
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             setColorFilter(Color.parseColor("#7A808C"))
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            setOnClickListener { hideCapsule() }
         }
-        root.addView(close, LinearLayout.LayoutParams(dp(36), dp(36)))
+        val clearView = ImageView(context).apply {
+            id = R.id.airtype_capsule_clear
+            setImageResource(R.drawable.ic_capsule_clear)
+            contentDescription = null
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            alpha = 0f
+        }
+        val action = FrameLayout(context).apply {
+            id = R.id.airtype_capsule_action
+            isClickable = true
+            isFocusable = true
+            background = null
+            setOnClickListener { onCapsuleAction() }
+        }
+        val glyphParams = FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER)
+        action.addView(closeView, glyphParams)
+        action.addView(clearView, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER))
+        root.addView(action, LinearLayout.LayoutParams(dp(36), dp(36)))
         return root
     }
 
@@ -359,6 +567,7 @@ class FloatingOverlayController(rawContext: Context) {
             else -> Color.parseColor("#EF4444")
         }
         (statusDot.background as? GradientDrawable)?.setColor(dotColor)
+        updateCapsuleAction(animate = false)
     }
 
     // ---- touch handling --------------------------------------------------------
@@ -417,7 +626,6 @@ class FloatingOverlayController(rawContext: Context) {
     private companion object {
         const val MARGIN_DP = 14
         const val CAPSULE_MAX_HEIGHT_DP = 64
-        const val ENTER_MS = 160L
         const val EXIT_MS = 120L
 
         /** Capsule stays above this fraction of the screen so the keyboard never hides it. */

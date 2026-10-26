@@ -55,8 +55,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -99,8 +97,8 @@ import com.livetype.remote.ui.components.LiveTypePrimaryButton
 import com.livetype.remote.ui.components.LiveTypeSecondaryButton
 import com.livetype.remote.ui.components.MetricStatTile
 import com.livetype.remote.ui.components.TactileCard
+import com.livetype.remote.ui.components.BubbleSizeSlider
 import com.livetype.remote.ui.theme.LiveTypeTokens
-import kotlin.math.roundToInt
 
 /** Professional bubble colours drawn from the existing AirType palette. */
 private val BUBBLE_COLORS = listOf(
@@ -646,17 +644,11 @@ fun SettingsScreen(vm: AppViewModel) {
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Slider(
-                                value = ui.bubbleSizeDp.toFloat(),
-                                onValueChange = { vm.setBubbleSize(it.roundToInt()) },
-                                valueRange = 44f..66f,
-                                steps = 10,
+                            BubbleSizeSlider(
+                                value = ui.bubbleSizeDp,
+                                valueRange = 44..66,
+                                onValueChange = { vm.setBubbleSize(it) },
                                 modifier = Modifier.weight(1f),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = LiveTypeTokens.AccentPeriwinkleDeep,
-                                    activeTrackColor = LiveTypeTokens.AccentPeriwinkle,
-                                    inactiveTrackColor = LiveTypeTokens.BorderSubtle,
-                                ),
                             )
                             Spacer(Modifier.width(10.dp))
                             // Live preview of the bubble at the chosen size and colour.

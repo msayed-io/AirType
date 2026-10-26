@@ -4,4 +4,8 @@
     <item name="airtype_bubble_icon" type="id" />
     <item name="airtype_capsule_dot" type="id" />
     <item name="airtype_capsule_input" type="id" />
+    <!-- Fixed 36dp slot holding both the close cross and the clear glyph. -->
+    <item name="airtype_capsule_action" type="id" />
+    <item name="airtype_capsule_close" type="id" />
+    <item name="airtype_capsule_clear" type="id" />
 </resources>
