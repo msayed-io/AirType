@@ -109,6 +109,26 @@ class PairingStore(context: Context) {
         get() = prefs.getBoolean(KEY_AUTO_CONNECT, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_CONNECT, value).apply()
 
+    // ---- floating bubble ------------------------------------------------------
+
+    /** Bubble diameter in dp; clamped so the icon stays readable and draggable. */
+    var bubbleSizeDp: Int
+        get() = prefs.getInt(KEY_BUBBLE_SIZE, DEFAULT_BUBBLE_SIZE_DP).coerceIn(MIN_BUBBLE_SIZE_DP, MAX_BUBBLE_SIZE_DP)
+        set(value) = prefs.edit().putInt(KEY_BUBBLE_SIZE, value.coerceIn(MIN_BUBBLE_SIZE_DP, MAX_BUBBLE_SIZE_DP)).apply()
+
+    /** Solid bubble colour as ARGB. */
+    var bubbleColor: Int
+        get() = prefs.getInt(KEY_BUBBLE_COLOR, DEFAULT_BUBBLE_COLOR)
+        set(value) = prefs.edit().putInt(KEY_BUBBLE_COLOR, value).apply()
+
+    var bubbleX: Int
+        get() = prefs.getInt(KEY_BUBBLE_X, 0)
+        set(value) = prefs.edit().putInt(KEY_BUBBLE_X, value).apply()
+
+    var bubbleY: Int
+        get() = prefs.getInt(KEY_BUBBLE_Y, -1)
+        set(value) = prefs.edit().putInt(KEY_BUBBLE_Y, value).apply()
+
     private companion object {
         const val LEGACY_PREFS_NAME = "livetype_trusted_pairing"
         const val SECURE_PREFS_NAME = "livetype_trusted_pairing_secure"
@@ -164,5 +184,16 @@ class PairingStore(context: Context) {
         const val KEY_VIBRATE = "vibrate_on_pair"
         const val KEY_REMEMBER = "remember_pairing"
         const val KEY_AUTO_CONNECT = "auto_connect_trusted"
+        const val KEY_BUBBLE_SIZE = "overlay_bubble_size"
+        const val KEY_BUBBLE_COLOR = "overlay_bubble_color"
+        const val KEY_BUBBLE_X = "overlay_bubble_x"
+        const val KEY_BUBBLE_Y = "overlay_bubble_y"
+
+        const val DEFAULT_BUBBLE_SIZE_DP = 54
+        const val MIN_BUBBLE_SIZE_DP = 44
+        const val MAX_BUBBLE_SIZE_DP = 66
+
+        /** Periwinkle deep — the app's signature accent. */
+        const val DEFAULT_BUBBLE_COLOR = 0xFF5F7ABF.toInt()
     }
 }
