@@ -121,8 +121,9 @@ class PairingStore(context: Context) {
         get() = prefs.getInt(KEY_BUBBLE_COLOR, DEFAULT_BUBBLE_COLOR)
         set(value) = prefs.edit().putInt(KEY_BUBBLE_COLOR, value).apply()
 
+    /** -1 means "never moved": the bubble starts at the trailing edge. */
     var bubbleX: Int
-        get() = prefs.getInt(KEY_BUBBLE_X, 0)
+        get() = prefs.getInt(KEY_BUBBLE_X, -1)
         set(value) = prefs.edit().putInt(KEY_BUBBLE_X, value).apply()
 
     var bubbleY: Int

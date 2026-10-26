@@ -194,8 +194,10 @@ class FloatingOverlayController(rawContext: Context) {
         bubble.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(EXIT_MS).start()
         capsule.alpha = 0f
         capsule.animate().alpha(1f).setDuration(ENTER_MS).start()
-        input.requestFocus()
         input.post {
+            // Requesting focus before the window is laid out is silently dropped, which
+            // would leave the capsule visible but untypeable.
+            input.requestFocus()
             ime?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
         }
     }

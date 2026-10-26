@@ -188,7 +188,10 @@ class AirTypeSessionService : Service() {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val disconnect = PendingIntent.getService(
+        // getForegroundService (API 26+, our minSdk) rather than getService: the tap lands
+        // while the app is in the background, and onStartCommand re-enters the foreground
+        // state immediately, so no background-start restriction is tripped.
+        val disconnect = PendingIntent.getForegroundService(
             this,
             1,
             Intent(this, AirTypeSessionService::class.java).setAction(ACTION_DISCONNECT),

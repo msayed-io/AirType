@@ -85,7 +85,6 @@ object AirTypeSession {
     private var currentInfo: PairingInfo? = null
     private var currentPcName: String = ""
     private var resyncOnNextSessionReady = false
-    private var observing = false
 
     @Volatile
     var initialized: Boolean = false
@@ -225,9 +224,6 @@ object AirTypeSession {
         }
         scope.launch {
             conn.messages.collect { env -> onServerMessage(env, conn) }
-        }
-        if (!observing) {
-            observing = true
         }
         scope.launch {
             conn.reconnected.collect {
