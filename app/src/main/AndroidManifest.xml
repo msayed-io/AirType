@@ -8,6 +8,17 @@
     <!-- Camera is used only for scanning the pairing QR code. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Session continuity: the connection to the paired PC is kept by a foreground
+         service of type connectedDevice (a network link to the user's own computer).
+         CHANGE_WIFI_MULTICAST_STATE is already required by LAN discovery and is also the
+         manifest prerequisite Android asks for that service type. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Android 13+ runtime permission so the ongoing session notice is visible. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Floating bubble + writing capsule drawn over other apps (granted via the system
+         settings screen, checked with Settings.canDrawOverlays before every use). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
@@ -38,6 +49,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".service.AirTypeSessionService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
     </application>
 
 </manifest>

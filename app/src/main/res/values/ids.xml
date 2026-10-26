@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Ids for the floating overlay views built in code (bubble + writing capsule). -->
+    <item name="airtype_bubble_icon" type="id" />
+    <item name="airtype_capsule_dot" type="id" />
+    <item name="airtype_capsule_input" type="id" />
+</resources>
