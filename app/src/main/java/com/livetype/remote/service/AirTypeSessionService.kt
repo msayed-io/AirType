@@ -53,6 +53,7 @@ class AirTypeSessionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         AirTypeSession.init(applicationContext)
         createChannel()
     }
@@ -81,6 +82,7 @@ class AirTypeSessionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        instance = null
         hideOverlay()
         collector?.cancel()
         scope.cancel()
@@ -213,6 +215,10 @@ class AirTypeSessionService : Service() {
     }
 
     companion object {
+        /** Set while the service is alive; cleared in [onDestroy]. */
+        @Volatile
+        private var instance: AirTypeSessionService? = null
+
         const val ACTION_START = "com.livetype.remote.action.START_SESSION"
         const val ACTION_SHOW_OVERLAY = "com.livetype.remote.action.SHOW_OVERLAY"
         const val ACTION_HIDE_OVERLAY = "com.livetype.remote.action.HIDE_OVERLAY"
@@ -233,6 +239,31 @@ class AirTypeSessionService : Service() {
         fun hideOverlay(context: Context) = send(context, ACTION_HIDE_OVERLAY)
 
         fun refreshOverlay(context: Context) = send(context, ACTION_REFRESH_OVERLAY)
+
+        /**
+         * The service lives in the same process as the screens, so appearance changes do
+         * not need an Intent round trip: waking the service through startForegroundService
+         * for every slider step was what made dragging the size control stutter.
+         * Returns false when no overlay is on screen (then there is nothing to redraw).
+         */
+        fun applyBubbleAppearance(): Boolean {
+            val controller = instance?.overlay ?: return false
+            if (!controller.isBubbleShown()) return false
+            controller.applyAppearance()
+            return true
+        }
+
+        /**
+         * Hides a bubble that is actually on screen, without waking the service. Used when
+         * the user returns to the in-app writing screen, where the floating bubble would
+         * only cover the interface it duplicates. The session is never touched.
+         */
+        fun hideOverlayIfShown(): Boolean {
+            val controller = instance?.overlay ?: return false
+            if (!controller.isBubbleShown()) return false
+            controller.hideBubble()
+            return true
+        }
 
         fun disconnect(context: Context) = send(context, ACTION_DISCONNECT)
 

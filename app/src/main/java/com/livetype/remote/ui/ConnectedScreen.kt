@@ -171,21 +171,35 @@ fun ConnectedScreen(vm: AppViewModel) {
         }
     }
 
-    // Re-check the overlay permission when the user comes back from system settings.
+    // Re-check the overlay permission when the user comes back from system settings, and
+    // take the floating bubble off the screen whenever this writing screen is the one the
+    // user is looking at again: above AirType's own typing screen it only duplicates it.
+    // Hiding it is a window operation only — the session, the stored settings and the
+    // streamed text are never touched, and the service keeps running untouched.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME && awaitingOverlayPermission) {
                 awaitingOverlayPermission = false
                 if (OverlayPermission.canDraw(context)) {
+                    // This path shows the bubble on purpose and backgrounds the app, so it
+                    // must not be undone by the dismissal below.
                     enterFloatingMode()
                 } else {
                     floatingMessage = strings["floating_permission_needed"]
                 }
+            } else if (event == Lifecycle.Event.ON_RESUME) {
+                AirTypeSessionService.hideOverlayIfShown()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Also covers walking back into this screen from Settings without a resume, and the
+    // first composition after Android recreated the activity.
+    LaunchedEffect(Unit) {
+        AirTypeSessionService.hideOverlayIfShown()
     }
 
     // Keep screen awake during live typing

@@ -1,17 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  "Clear the field" glyph: a filled neutral disc with a white cross cut through it, so it
-  can never be confused with the bare close cross that occupies the same 36dp slot.
+  "Clear the capsule text" glyph: a plain bin, drawn as an outline with no disc, ring or
+  background behind it — one clean glyph in the same 36dp slot as the close cross.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
+    <!-- lid -->
     <path
-        android:fillColor="#C7CBD4"
-        android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2z" />
+        android:fillColor="#7A808C"
+        android:pathData="M9,2.5h6c0.55,0 1,0.45 1,1V4.5h3.25c0.55,0 1,0.45 1,1s-0.45,1 -1,1H4.75c-0.55,0 -1,-0.45 -1,-1s0.45,-1 1,-1H8V3.5c0,-0.55 0.45,-1 1,-1z" />
+    <!-- body with two ribs (even-odd fill so the ribs cut through cleanly) -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M15.89,7.05L12,10.94 8.11,7.05 7.05,8.11 10.94,12 7.05,15.89 8.11,16.95 12,13.06 15.89,16.95 16.95,15.89 13.06,12 16.95,8.11z" />
+        android:fillColor="#7A808C"
+        android:fillType="evenOdd"
+        android:pathData="M6.25,8h11.5l-0.72,11.1c-0.07,1.06 -0.95,1.9 -2.02,1.9H8.99c-1.07,0 -1.95,-0.84 -2.02,-1.9zM10,10.4c-0.33,0 -0.6,0.27 -0.6,0.6v7c0,0.33 0.27,0.6 0.6,0.6s0.6,-0.27 0.6,-0.6v-7c0,-0.33 -0.27,-0.6 -0.6,-0.6zM14,10.4c-0.33,0 -0.6,0.27 -0.6,0.6v7c0,0.33 0.27,0.6 0.6,0.6s0.6,-0.27 0.6,-0.6v-7c0,-0.33 -0.27,-0.6 -0.6,-0.6z" />
 </vector>

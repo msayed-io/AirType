@@ -1,7 +1,10 @@
 package com.livetype.remote
 
 import com.livetype.remote.ui.overlay.CapsuleAction
+import com.livetype.remote.ui.overlay.CapsuleCommand
 import com.livetype.remote.ui.overlay.CapsuleMotion
+import com.livetype.remote.ui.overlay.CapsulePhase
+import com.livetype.remote.ui.overlay.CapsuleRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -53,6 +56,54 @@ class CapsuleMotionTest {
         assertEquals(1f, CapsuleMotion.alphaFor(1f), 0.0001f)
         assertEquals(0f, CapsuleMotion.alphaFor(0f), 0.0001f)
         assertEquals(0f, CapsuleMotion.translationFor(1f), 0.0001f)
+    }
+
+    @Test
+    fun `a second close request while closing is ignored`() {
+        assertEquals(
+            CapsuleCommand.NONE,
+            CapsuleMotion.command(CapsulePhase.HIDING, CapsuleRequest.HIDE),
+        )
+        assertEquals(
+            CapsuleCommand.NONE,
+            CapsuleMotion.command(CapsulePhase.HIDING, CapsuleRequest.TOGGLE),
+        )
+        assertEquals(
+            CapsuleCommand.NONE,
+            CapsuleMotion.command(CapsulePhase.HIDDEN, CapsuleRequest.HIDE),
+        )
+    }
+
+    @Test
+    fun `one open and one close are the only transitions allowed while visible`() {
+        assertEquals(
+            CapsuleCommand.CLOSE,
+            CapsuleMotion.command(CapsulePhase.SHOWN, CapsuleRequest.HIDE),
+        )
+        assertEquals(
+            CapsuleCommand.CLOSE,
+            CapsuleMotion.command(CapsulePhase.SHOWING, CapsuleRequest.HIDE),
+        )
+        assertEquals(
+            CapsuleCommand.NONE,
+            CapsuleMotion.command(CapsulePhase.SHOWN, CapsuleRequest.SHOW),
+        )
+        assertEquals(
+            CapsuleCommand.NONE,
+            CapsuleMotion.command(CapsulePhase.SHOWING, CapsuleRequest.SHOW),
+        )
+    }
+
+    @Test
+    fun `a tap during the exit reverses it instead of starting a second close`() {
+        assertEquals(
+            CapsuleCommand.OPEN,
+            CapsuleMotion.command(CapsulePhase.HIDING, CapsuleRequest.SHOW),
+        )
+        assertEquals(
+            CapsuleCommand.OPEN,
+            CapsuleMotion.command(CapsulePhase.HIDDEN, CapsuleRequest.TOGGLE),
+        )
     }
 
     @Test

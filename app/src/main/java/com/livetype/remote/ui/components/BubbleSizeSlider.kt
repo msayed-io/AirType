@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,14 +33,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.livetype.remote.ui.theme.LiveTypeTokens
 import kotlin.math.roundToInt
@@ -65,7 +64,6 @@ fun BubbleSizeSlider(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val animationsOn = remember(context) {
         runCatching {
             Settings.Global.getFloat(
@@ -108,38 +106,47 @@ fun BubbleSizeSlider(
 
     val min = valueRange.first
     val max = valueRange.last
-    val span = (max - min).coerceAtLeast(1)
-    val fraction = ((value - min).toFloat() / span).coerceIn(0f, 1f)
-    val shown = if (rtl) 1f - fraction else fraction
+    val fraction = SliderGeometry.fractionOf(value, min, max)
+
+    // While a finger is down the thumb follows the finger through this local float, so the
+    // position on screen never waits for a state round trip through the view model.
+    var dragging by remember { mutableStateOf(false) }
+    var dragFraction by remember { mutableFloatStateOf(fraction) }
+    val shown = if (dragging) dragFraction else fraction
 
     val thumbWidthPx = with(density) { thumbWidth.toPx() }
     // Read inside the gesture: the thumb grows while it is held, and the drag must follow
     // the finger with the live width instead of restarting the gesture when it changes.
     val liveThumbWidthPx = rememberUpdatedState(thumbWidthPx)
 
-    val travel = (widthPx - thumbWidthPx).coerceAtLeast(0f)
-    val thumbCentreX = thumbWidthPx / 2f + shown * travel
+    val thumbCentreX = if (widthPx > 0) {
+        SliderGeometry.thumbCentrePx(widthPx.toFloat(), thumbWidthPx, shown)
+    } else {
+        thumbWidthPx / 2f
+    }
 
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(ControlHeight)
             .onSizeChanged { widthPx = it.width }
-            .pointerInput(widthPx, rtl, min, max) {
+            .pointerInput(widthPx, min, max) {
                 if (widthPx <= 0) return@pointerInput
                 awaitEachGesture {
-                    // Minimum on the leading side, maximum on the trailing one — the same
-                    // direction people already expect from every slider they know.
-                    fun valueAt(x: Float): Int {
-                        val usable = (widthPx - liveThumbWidthPx.value).coerceAtLeast(1f)
-                        val raw = ((x - liveThumbWidthPx.value / 2f) / usable).coerceIn(0f, 1f)
-                        val directed = if (rtl) 1f - raw else raw
-                        return (min + (directed * span).roundToInt()).coerceIn(min, max)
+                    // One axis, no mirroring: right is always more, left is always less.
+                    fun track(x: Float) {
+                        val thumb = liveThumbWidthPx.value
+                        dragFraction = SliderGeometry.fractionAt(x, widthPx.toFloat(), thumb)
+                        onValueChange(
+                            SliderGeometry.valueAt(x, widthPx.toFloat(), thumb, min, max)
+                        )
                     }
                     val down = awaitFirstDown(requireUnconsumed = false)
                     down.consume()
                     pressed = true
-                    onValueChange(valueAt(down.position.x))
+                    dragging = true
+                    dragFraction = fraction
+                    track(down.position.x)
                     var tracking = true
                     while (tracking) {
                         val event = awaitPointerEvent()
@@ -149,16 +156,18 @@ fun BubbleSizeSlider(
                             !change.pressed -> {
                                 change.consume()
                                 pressed = false
+                                dragging = false
                                 tracking = false
                             }
 
                             else -> {
-                                onValueChange(valueAt(change.position.x))
+                                track(change.position.x)
                                 change.consume()
                             }
                         }
                     }
                     pressed = false
+                    dragging = false
                 }
             }
             .semantics {
@@ -183,17 +192,13 @@ fun BubbleSizeSlider(
                     size = Size(trackWidth, size.height),
                     cornerRadius = radius,
                 )
-                // Filled part: always grows away from the leading edge, so it reads the
-                // same in Arabic (right to left) as it does in English.
+                // The filled part grows from the left edge to the thumb, like the thumb
+                // itself: one direction, no mirroring.
                 val filled = (shown * trackWidth).coerceIn(0f, trackWidth)
                 if (filled > 0f) {
                     drawRoundRect(
                         color = LiveTypeTokens.AccentPeriwinkleDeep,
-                        topLeft = if (rtl) {
-                            Offset(inset + trackWidth - filled, 0f)
-                        } else {
-                            Offset(inset, 0f)
-                        },
+                        topLeft = Offset(inset, 0f),
                         size = Size(filled, size.height),
                         cornerRadius = radius,
                     )

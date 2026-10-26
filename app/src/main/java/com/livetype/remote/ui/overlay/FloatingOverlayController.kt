@@ -79,7 +79,8 @@ class FloatingOverlayController(rawContext: Context) {
     private var lastSnapshot: SessionSnapshot = SessionSnapshot()
     private var capsuleAnimator: ValueAnimator? = null
     private var capsuleProgress = 0f
-    private var capsuleClosing = false
+    /** The one place that decides whether an open or close may start right now. */
+    private var capsulePhase = CapsulePhase.HIDDEN
 
     private fun dp(value: Int): Int =
         (value * context.resources.displayMetrics.density).roundToInt()
@@ -158,15 +159,24 @@ class FloatingOverlayController(rawContext: Context) {
     /**
      * Tap on the bubble: show the capsule (and the keyboard), or hide it again.
      *
-     * While a close transition is still running the capsule counts as hidden, so a second
-     * tap re-opens it and the running motion is reversed instead of stacking a new one.
+     * The decision goes through [CapsuleMotion.command], so a tap during a close reverses
+     * the single running motion instead of starting a second one.
      */
     @SuppressLint("ClickableViewAccessibility")
     fun toggleCapsule() {
-        if (capsuleAttached && !capsuleClosing) hideCapsule() else showCapsule()
+        when (CapsuleMotion.command(capsulePhase, CapsuleRequest.TOGGLE)) {
+            CapsuleCommand.CLOSE -> hideCapsule()
+            CapsuleCommand.OPEN -> showCapsule()
+            CapsuleCommand.NONE -> Unit
+        }
     }
 
     fun showCapsule() {
+        if (CapsuleMotion.command(capsulePhase, CapsuleRequest.SHOW) == CapsuleCommand.NONE) {
+            // Already open (or opening): never attach or animate a second time.
+            focusCapsuleInput()
+            return
+        }
         if (!bubbleAttached) showBubble(lastSnapshot)
         val (screenW, screenH) = usableBounds()
         val margin = dp(MARGIN_DP)
@@ -217,23 +227,33 @@ class FloatingOverlayController(rawContext: Context) {
         // The capsule grows out of the edge of the bubble it belongs to, so the pair reads
         // as one floating object rather than as a second, unrelated window.
         anchorCapsule(pivotBubble = bubbleP, capsuleWidthPx = width)
-        capsuleClosing = false
-        animateCapsuleTo(1f)
-        input.post {
-            // Requesting focus before the window is laid out is silently dropped, which
-            // would leave the capsule visible but untypeable.
-            input.requestFocus()
-            ime?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        capsulePhase = CapsulePhase.SHOWING
+        animateCapsuleTo(1f) {
+            if (capsulePhase == CapsulePhase.SHOWING) capsulePhase = CapsulePhase.SHOWN
         }
+        focusCapsuleInput()
     }
 
     fun hideCapsule() {
-        if (!capsuleAttached) return
+        // A second hide while the exit motion runs must not restart it, and a hide that
+        // arrives when nothing is shown must not touch the window at all.
+        if (CapsuleMotion.command(capsulePhase, CapsuleRequest.HIDE) != CapsuleCommand.CLOSE) return
+        capsulePhase = CapsulePhase.HIDING
         ime?.hideSoftInputFromWindow(input.windowToken, 0)
-        capsuleClosing = true
         // The window is removed only once the motion has actually finished, so it never
         // vanishes mid-flight and never leaves an invisible layer behind.
-        animateCapsuleTo(0f) { removeCapsuleWindow.run() }
+        animateCapsuleTo(0f) {
+            if (capsulePhase == CapsulePhase.HIDING) removeCapsuleWindow.run()
+        }
+    }
+
+    /** Requests focus once the window is laid out; silently dropped before that. */
+    private fun focusCapsuleInput() {
+        input.post {
+            if (capsulePhase != CapsulePhase.SHOWING && capsulePhase != CapsulePhase.SHOWN) return@post
+            input.requestFocus()
+            ime?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     /** Removes the capsule window. Idempotent: safe from the motion end and from destroy(). */
@@ -246,7 +266,7 @@ class FloatingOverlayController(rawContext: Context) {
             capsuleAttached = false
         }
         capsuleParams = null
-        capsuleClosing = false
+        capsulePhase = CapsulePhase.HIDDEN
     }
 
     // ---- capsule motion and the smart trailing button ---------------------------

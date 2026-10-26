@@ -535,18 +535,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(autoConnectEnabled = on) }
     }
 
-    /** Bubble diameter in dp; applied to a live bubble without touching the session. */
+    /**
+     * Bubble diameter in dp; applied to a live bubble without touching the session.
+     *
+     * Called for every pointer movement of the size slider, so the whole path has to stay
+     * cheap: nothing is written and nothing is redrawn when the integer value has not
+     * actually changed, and a live bubble is updated in-process instead of by waking the
+     * service with a new Intent (that startForegroundService per slider step was the
+     * stutter). The final value is what the store keeps, so reopening Settings shows it.
+     */
     fun setBubbleSize(sizeDp: Int) {
-        store.bubbleSizeDp = sizeDp
-        _ui.update { it.copy(bubbleSizeDp = store.bubbleSizeDp) }
-        AirTypeSessionService.refreshOverlay(appContext)
+        // PairingStore already clamps to its own 44..66 range; obey the same bounds here so
+        // the state can never disagree with what the store would return.
+        val clamped = sizeDp.coerceIn(
+            PairingStore.MIN_BUBBLE_SIZE_DP,
+            PairingStore.MAX_BUBBLE_SIZE_DP,
+        )
+        if (_ui.value.bubbleSizeDp == clamped) return
+        store.bubbleSizeDp = clamped
+        _ui.update { it.copy(bubbleSizeDp = clamped) }
+        AirTypeSessionService.applyBubbleAppearance()
     }
 
     /** Solid bubble colour; stored locally and applied live. */
     fun setBubbleColor(color: Int) {
+        if (_ui.value.bubbleColor == color) return
         store.bubbleColor = color
         _ui.update { it.copy(bubbleColor = color) }
-        AirTypeSessionService.refreshOverlay(appContext)
+        AirTypeSessionService.applyBubbleAppearance()
     }
 
     fun stopFloatingMode() {

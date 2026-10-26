@@ -9,6 +9,15 @@ enum class CapsuleAction {
     CLEAR,
 }
 
+/** Where the capsule window currently is in its open/close cycle. */
+enum class CapsulePhase { HIDDEN, SHOWING, SHOWN, HIDING }
+
+/** What the user (or the session) asked the capsule to do. */
+enum class CapsuleRequest { SHOW, HIDE, TOGGLE }
+
+/** The one transition that request is allowed to trigger, if any. */
+enum class CapsuleCommand { NONE, OPEN, CLOSE }
+
 /**
  * Pure motion and state maths of the writing capsule.
  *
@@ -42,6 +51,25 @@ object CapsuleMotion {
 
     /** `ωt` at which a critically damped spring is considered settled (≈ 0.7 % left). */
     private const val SETTLE_POINT = 7.0
+
+    /**
+     * The single-flight rule behind the close button.
+     *
+     * Every duplicate request is answered here instead of in the view code:
+     *  - a hide that arrives while the capsule is already closing is ignored, so the exit
+     *    motion can never be restarted or run twice,
+     *  - a hide that arrives while it is still opening turns into one close (one animator,
+     *    reversed from wherever it got to),
+     *  - a show that arrives while it is already open changes nothing.
+     */
+    fun command(phase: CapsulePhase, request: CapsuleRequest): CapsuleCommand {
+        val visible = phase == CapsulePhase.SHOWING || phase == CapsulePhase.SHOWN
+        return when (request) {
+            CapsuleRequest.SHOW -> if (visible) CapsuleCommand.NONE else CapsuleCommand.OPEN
+            CapsuleRequest.HIDE -> if (visible) CapsuleCommand.CLOSE else CapsuleCommand.NONE
+            CapsuleRequest.TOGGLE -> if (visible) CapsuleCommand.CLOSE else CapsuleCommand.OPEN
+        }
+    }
 
     fun actionFor(text: CharSequence?): CapsuleAction =
         if (text.isNullOrEmpty()) CapsuleAction.CLOSE else CapsuleAction.CLEAR
