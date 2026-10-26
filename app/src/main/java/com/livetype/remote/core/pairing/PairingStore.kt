@@ -130,7 +130,7 @@ class PairingStore(context: Context) {
         get() = prefs.getInt(KEY_BUBBLE_Y, -1)
         set(value) = prefs.edit().putInt(KEY_BUBBLE_Y, value).apply()
 
-    private companion object {
+    internal companion object {
         const val LEGACY_PREFS_NAME = "livetype_trusted_pairing"
         const val SECURE_PREFS_NAME = "livetype_trusted_pairing_secure"
         const val KEY_MIGRATION_COMPLETE = "secure_migration_complete"
